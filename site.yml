@@ -791,7 +791,7 @@
         msg: "Disk eklenecek VM'ler: {{ infra_vm_names }}"
 
     - name: "Her infra VM'ini kapat (Shut Down Guest OS)"
-      vmware.vmware.vm_powerstate:
+      community.vmware.vmware_guest_powerstate:
         hostname:       "{{ vcenter_host }}"
         username:       "{{ vcenter_username }}"
         password:       "{{ vcenter_password }}"
@@ -841,7 +841,7 @@
         label: "{{ item }}"
 
     - name: "Her infra VM'ini yeniden başlat (power-on)"
-      vmware.vmware.vm_powerstate:
+      community.vmware.vmware_guest_powerstate:
         hostname:       "{{ vcenter_host }}"
         username:       "{{ vcenter_username }}"
         password:       "{{ vcenter_password }}"
