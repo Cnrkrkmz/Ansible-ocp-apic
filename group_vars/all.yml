@@ -1,0 +1,62 @@
+# ============================================================
+#  OCP 4.20.17 – VMware IPI Kurulum Değişkenleri
+#  SGK_v4.docx dokümanı esas alınarak hazırlanmıştır.
+#
+#  NOT: Aşağıdaki vSphere / cluster değişkenleri playbook
+#  çalışırken /home/admin/vmware-ipi.yaml dosyasından
+#  otomatik olarak okunur. Buraya girmenize gerek yoktur:
+#    vcenter_host, vcenter_username, vcenter_password,
+#    vcenter_datacenter, vcenter_cluster, vcenter_network,
+#    vcenter_datastore, vcenter_resource_pool, vcenter_folder,
+#    cluster_name, base_domain,
+#    vsphere_api_vip, vsphere_ingress_vip
+# ============================================================
+
+# ---- OCP Versiyon ----
+ocp_version: "4.20.17"
+ocp_mirror_base: "https://mirror.openshift.com/pub/openshift-v4/x86_64/clients/ocp"
+ocp_client_tarball:       "openshift-client-linux-{{ ocp_version }}.tar.gz"
+ocp_client_rhel8_tarball: "openshift-client-linux-amd64-rhel8-{{ ocp_version }}.tar.gz"
+ocp_install_tarball:      "openshift-install-linux-{{ ocp_version }}.tar.gz"
+
+# ---- Dizinler ----
+install_base_dir: "/root/ocpinstall"
+# cluster_dir pre_tasks'ta dinamik olarak set edilir
+
+# ---- Pull Secret ----
+# https://console.redhat.com/openshift/install adresinden alın
+# Ansible Vault ile şifrelemeniz önerilir:
+#   ansible-vault encrypt_string '<pull_secret>' --name pull_secret
+pull_secret: #buraya pull secret input alınacak kullanıcıya alınacak adresi sunabiliriz
+# ---- SSH Public Key (otomatik oluşturulacak) ----
+ssh_key_path: "/root/.ssh/id_ed25519"
+
+# ---- Machine Network (sabit – her zaman bu değer kullanılır) ----
+machine_network_cidr: "192.168.252.0/24"
+host_prefix: 23
+
+# ---- Service & Pod Network ----
+service_network_cidr: "172.30.0.0/16"
+pod_network_cidr: "10.128.0.0/14"
+
+# ---- Control Plane Boyutlandırma (§2.6 SGK_v4) ----
+control_plane_replicas: 3
+control_plane_cpus: 8
+control_plane_cores_per_socket: 2
+control_plane_memory_mb: 16384
+control_plane_disk_gb: 120
+
+# ---- Worker Boyutlandırma (§2.6 SGK_v4) ----
+worker_replicas: 3
+worker_cpus: 16
+worker_cores_per_socket: 2
+worker_memory_mb: 32768
+worker_disk_gb: 300
+
+# ---- Infra MachineSet Boyutlandırma (§3.1 SGK_v4) ----
+infra_replicas: 3
+infra_cpus: 32
+infra_cores_per_socket: 2
+infra_memory_mb: 32768
+infra_disk_gb: 300
+

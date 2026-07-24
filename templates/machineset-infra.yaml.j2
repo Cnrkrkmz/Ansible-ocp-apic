@@ -1,0 +1,80 @@
+apiVersion: v1
+baseDomain: {{ base_domain }}
+metadata:
+  name: {{ cluster_name }}
+
+# ============================================================
+# Compute (Worker) node yapılandırması
+# SGK_v4.docx §2.6 – Adım 12
+# ============================================================
+compute:
+  - hyperthreading: Enabled
+    architecture: amd64
+    name: worker
+    replicas: {{ worker_replicas }}
+    platform:
+      vsphere:
+        cpus: {{ worker_cpus }}
+        coresPerSocket: {{ worker_cores_per_socket }}
+        memoryMB: {{ worker_memory_mb }}
+        osDisk:
+          diskSizeGB: {{ worker_disk_gb }}
+
+# ============================================================
+# Control Plane (Master) node yapılandırması
+# ============================================================
+controlPlane:
+  architecture: amd64
+  hyperthreading: Enabled
+  name: master
+  replicas: {{ control_plane_replicas }}
+  platform:
+    vsphere:
+      cpus: {{ control_plane_cpus }}
+      coresPerSocket: {{ control_plane_cores_per_socket }}
+      memoryMB: {{ control_plane_memory_mb }}
+      osDisk:
+        diskSizeGB: {{ control_plane_disk_gb }}
+
+# ============================================================
+# Platform – VMware vSphere
+# Tüm değerler /home/admin/vmware-ipi.yaml'dan okunur.
+# resourcePool ve folder alanları her zaman dahil edilir;
+# install-config sihirbazı folder'ı oluşturmayabilir (§2.6 notu).
+# ============================================================
+platform:
+  vsphere:
+    vcenter: {{ vcenter_host }}
+    username: {{ vcenter_username }}
+    password: {{ vcenter_password }}
+    datacenter: {{ vcenter_datacenter }}
+    defaultDatastore: {{ vcenter_datastore }}
+    cluster: {{ vcenter_cluster }}
+    network: {{ vcenter_network }}
+    resourcePool: {{ vcenter_resource_pool }}
+    folder: {{ vcenter_folder }}
+    apiVIPs:
+      - {{ vsphere_api_vip }}
+    ingressVIPs:
+      - {{ vsphere_ingress_vip }}
+
+# ============================================================
+# Ağ yapılandırması
+# machineNetwork sabit olarak 192.168.252.0/24 kullanılır.
+# ============================================================
+networking:
+  clusterNetwork:
+    - cidr: {{ pod_network_cidr }}
+      hostPrefix: {{ host_prefix }}
+  machineNetwork:
+    - cidr: 192.168.252.0/24
+  networkType: OVNKubernetes
+  serviceNetwork:
+    - {{ service_network_cidr }}
+
+# ============================================================
+# Pull Secret ve SSH key
+# ============================================================
+pullSecret: '{{ pull_secret }}'
+sshKey: '{{ ssh_public_key }}'
+
