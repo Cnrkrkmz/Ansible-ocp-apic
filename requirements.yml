@@ -4,3 +4,5 @@
 collections:
   - name: community.vmware
     version: ">=4.0.0"
+  - name: vmware.vmware
+    version: ">=1.0.0"

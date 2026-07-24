@@ -791,27 +791,27 @@
         msg: "Disk eklenecek VM'ler: {{ infra_vm_names }}"
 
     - name: "Her infra VM'ini kapat (Shut Down Guest OS)"
-      community.vmware.vmware_guest_powerstate:
-        hostname:   "{{ vcenter_host }}"
-        username:   "{{ vcenter_username }}"
-        password:   "{{ vcenter_password }}"
+      vmware.vmware.vm_powerstate:
+        hostname:       "{{ vcenter_host }}"
+        username:       "{{ vcenter_username }}"
+        password:       "{{ vcenter_password }}"
         validate_certs: false
-        datacenter: "{{ vcenter_datacenter }}"
-        folder:     "{{ vcenter_folder }}"
-        name:       "{{ item }}"
-        state:      shutdown-guest
+        datacenter:     "{{ vcenter_datacenter }}"
+        folder:         "{{ vcenter_folder }}"
+        name:           "{{ item }}"
+        state:          shutdown-guest
       loop: "{{ infra_vm_names }}"
       loop_control:
         label: "{{ item }}"
 
     - name: "VM'lerin tamamen kapanmasını bekle (PoweredOff)"
       community.vmware.vmware_guest_info:
-        hostname:   "{{ vcenter_host }}"
-        username:   "{{ vcenter_username }}"
-        password:   "{{ vcenter_password }}"
+        hostname:       "{{ vcenter_host }}"
+        username:       "{{ vcenter_username }}"
+        password:       "{{ vcenter_password }}"
         validate_certs: false
-        datacenter: "{{ vcenter_datacenter }}"
-        name:       "{{ item }}"
+        datacenter:     "{{ vcenter_datacenter }}"
+        name:           "{{ item }}"
       register: vm_info
       until: vm_info.instance.hw_power_status == 'poweredOff'
       retries: 20
@@ -823,33 +823,33 @@
 
     - name: "Her infra VM'ine {{ infra_extra_disk_gb }} GB disk ekle"
       community.vmware.vmware_guest_disk:
-        hostname:   "{{ vcenter_host }}"
-        username:   "{{ vcenter_username }}"
-        password:   "{{ vcenter_password }}"
+        hostname:       "{{ vcenter_host }}"
+        username:       "{{ vcenter_username }}"
+        password:       "{{ vcenter_password }}"
         validate_certs: false
-        datacenter: "{{ vcenter_datacenter }}"
-        folder:     "{{ vcenter_folder }}"
-        name:       "{{ item }}"
+        datacenter:     "{{ vcenter_datacenter }}"
+        folder:         "{{ vcenter_folder }}"
+        name:           "{{ item }}"
         disk:
-          - size_gb:  "{{ infra_extra_disk_gb }}"
-            type:     thin
-            datastore: "{{ vcenter_datastore }}"
-            state:    present
-            scsi_type: paravirtual
+          - size_gb:    "{{ infra_extra_disk_gb }}"
+            type:       thin
+            datastore:  "{{ vcenter_datastore }}"
+            state:      present
+            scsi_type:  paravirtual
       loop: "{{ infra_vm_names }}"
       loop_control:
         label: "{{ item }}"
 
     - name: "Her infra VM'ini yeniden başlat (power-on)"
-      community.vmware.vmware_guest_powerstate:
-        hostname:   "{{ vcenter_host }}"
-        username:   "{{ vcenter_username }}"
-        password:   "{{ vcenter_password }}"
+      vmware.vmware.vm_powerstate:
+        hostname:       "{{ vcenter_host }}"
+        username:       "{{ vcenter_username }}"
+        password:       "{{ vcenter_password }}"
         validate_certs: false
-        datacenter: "{{ vcenter_datacenter }}"
-        folder:     "{{ vcenter_folder }}"
-        name:       "{{ item }}"
-        state:      powered-on
+        datacenter:     "{{ vcenter_datacenter }}"
+        folder:         "{{ vcenter_folder }}"
+        name:           "{{ item }}"
+        state:          powered-on
       loop: "{{ infra_vm_names }}"
       loop_control:
         label: "{{ item }}"

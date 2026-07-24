@@ -1,153 +1,212 @@
-# OCP 4.20.17 – VMware IPI Ansible Kurulum Scripti
+# OCP 4.20.17 + ODF – VMware IPI Ansible Kurulum Scripti
 
-SGK_v4.docx dökümanının **Bölüm 2 (OpenShift Kurulumu)** ve **Bölüm 3 (Infra Node)** adımlarını
-otomatikleştiren Ansible playbook'u.
+SGK_v5.docx dökümanının **Bölüm 2 (OCP Kurulumu)**, **Bölüm 3 (Infra Node)**
+ve **Bölüm 4 (ODF)** adımlarını otomatikleştiren Ansible playbook seti.
 
 ---
 
 ## Proje Yapısı
 
 ```
-ocp-install-ansible/
-├── site.yml                          # Ana playbook
+Ansible-ocp-apic/
+├── site.yml                    # Ana giriş noktası – tüm süreci orkestre eder
+├── plays/
+│   └── 04_odf.yml              # §4 – ODF + Local Storage Operator kurulumu
 ├── inventory/
-│   └── hosts.ini                     # Bastion host tanımı
+│   └── hosts.ini               # Bastion host tanımı
 ├── group_vars/
-│   └── all.yml                       # Tüm değişkenler
-└── templates/
-    ├── install-config.yaml.j2        # OCP install-config şablonu
-    └── machineset-infra.yaml.j2      # Infra MachineSet şablonu
+│   └── all.yml                 # Tüm değişkenler (buraya secret yazmayın)
+├── templates/
+│   ├── install-config.yaml.j2
+│   └── machineset-infra.yaml.j2
+└── requirements.yml            # Ansible koleksiyon gereksinimleri
 ```
 
 ---
 
 ## Ön Gereksinimler
 
-| Gereksinim | Açıklama |
+### 1. Altyapı gereksinimleri
+
+| Gereksinim | Detay |
 |---|---|
-| Bastion host | RHEL 8/9 veya Rocky Linux |
-| Ansible | `>= 2.14` (`pip install ansible`) |
-| Koleksiyonlar | `community.crypto`, `ansible.posix` |
-| DNS | `api.<cluster>.<domain>` ve `*.apps.<cluster>.<domain>` kayıtları hazır olmalı |
+| Bastion host | RHEL 8 üzerinde çalışan bir VM |
+| Ansible | `>= 2.14` — bastion üzerinde kurulu olmalı |
+| Python | `>= 3.8` — `pip` ile paket kurulabilmeli |
+| DNS kayıtları | `api.<cluster>.<domain>` ve `*.apps.<cluster>.<domain>` açık olmalı |
 | Pull Secret | https://console.redhat.com/openshift/install adresinden alınır |
-| vCenter erişimi | Kurulum sırasında API erişimi açık olmalı |
-| İnternet erişimi | Bastion'dan `mirror.openshift.com` erişimi gerekli |
+| vCenter erişimi | Bastion → vCenter API (443) açık olmalı |
+| İnternet erişimi | Bastion → `mirror.openshift.com` açık olmalı |
+| vmware-ipi.yaml | `/home/admin/vmware-ipi.yaml` dosyası bastion üzerinde mevcut olmalı |
 
-### Gerekli Ansible koleksiyonlarını yükle
+### 2. vmware-ipi.yaml formatı
 
-```bash
-ansible-galaxy collection install community.crypto ansible.posix
+Playbook bu dosyayı otomatik okur; vCenter/cluster bilgilerini buraya yazın:
+
+```yaml
+# /home/admin/vmware-ipi.yaml
+vsphere_hostname:      "vcenter.example.local"
+vsphere_username:      "administrator@vsphere.local"
+vsphere_password:      "CHANGE_ME"
+vsphere_datacenter:    "Datacenter"
+vsphere_cluster:       "Cluster"
+vsphere_network:       "VM Network"
+vsphere_datastore:     "datastore1"
+vsphere_resource_pool: "/Datacenter/host/Cluster/Resources/ocp"
+vsphere_folder:        "/Datacenter/vm/ocp"
+cluster_name:          "ocp"
+base_domain:           "example.com"
+vsphere_api_vip:       "192.168.252.5"
+vsphere_ingress_vip:   "192.168.252.6"
 ```
 
 ---
 
-## Hızlı Başlangıç
+## Kurulum – Adım Adım
 
-### 1. Değişkenleri düzenle
+### Adım 1 — Koleksiyonları ve bağımlılıkları yükle
 
-```yaml
-# group_vars/all.yml
-cluster_name: "ocp"
-base_domain: "example.com"
-pull_secret: '{"auths": ...}'   # Red Hat konsolundan al
-vcenter_host: "vcenter.example.local"
-vcenter_username: "administrator@vsphere.local"
-vcenter_password: "CHANGE_ME"
-vcenter_datacenter: "Datacenter"
-vcenter_cluster: "Cluster"
-vcenter_network: "VM Network"
-vcenter_datastore: "datastore1"
-machine_network_cidr: "10.0.0.0/16"
+Bastion host üzerinde bir kez çalıştırın:
+
+```bash
+# Ansible koleksiyonları
+ansible-galaxy collection install -r requirements.yml
+
+# community.vmware için Python kütüphanesi
+pip install pyVmomi
 ```
 
-### 2. Inventory'yi düzenle
+### Adım 2 — Inventory'yi kontrol et
+
+`inventory/hosts.ini` iki senaryo içerir:
 
 ```ini
-# inventory/hosts.ini
+# Senaryo A: Ansible bastion üzerinde çalışıyorsa (önerilen)
 [bastion]
-bastion ansible_host=<BASTION_IP> ansible_user=root
+bastion ansible_host=127.0.0.1 ansible_connection=local ansible_user=root
+
+# Senaryo B: Ansible kendi bilgisayarınızda kuruluysa
+# [bastion]
+# bastion ansible_host=<BASTION_IP> ansible_user=root
 ```
 
-### 3. Playbook'u çalıştır
+Durumunuza göre ilgili satırı aktif bırakın, diğerini yorum yapın.
+
+### Adım 3 — group_vars/all.yml'i gözden geçir
+
+```yaml
+# Versiyon ve dizinler otomatik gelir, değiştirmenize gerek yok.
+# Sadece IBM ortamına özel değerleri kontrol edin:
+machine_network_cidr: "192.168.252.0/24"   # sabit
+infra_extra_disk_gb:  1024                  # ODF için her infra node'una eklenecek disk
+odf_channel:          "stable-4.16"        # OCP 4.20 uyumlu
+```
+
+### Adım 4 — Playbook'u çalıştır
 
 ```bash
 ansible-playbook -i inventory/hosts.ini site.yml
 ```
 
-> **Not:** Cluster kurulum adımı yaklaşık **30–60 dakika** sürer.
-> Ansible `async: 7200 / poll: 60` ile her dakika durumu kontrol eder.
+Playbook başlarken Pull Secret'ı terminalden sorar (ekranda görünmez):
 
----
-
-## Playbook Adımları (SGK_v4.docx Referansı)
-
-| Adım | Ansible Görevi | Dokümandaki Karşılığı |
-|------|---------------|----------------------|
-| 1 | Kurulum dizini oluştur | §2.2 – `mkdir ocpinstall` |
-| 2 | OCP binary'leri indir | §2.2 – `wget` ile tarball indirme |
-| 3 | Arşivleri aç, PATH'e taşı | §2.2 – `tar -xvf / mv` |
-| 4 | vCenter Trusted CA indir | §2.3 – CA zip indirme |
-| 5 | CA sertifikaları sisteme yükle | §2.3 – `update-ca-trust extract` |
-| 6 | SSH key oluştur | §2.4 – `ssh-keygen -t ed25519` |
-| 7 | Hostname ayarla | §2.5 – hostname doğrulama |
-| 8 | SELinux devre dışı | §2.5 – `SELINUX=disabled` |
-| 9 | firewalld durdur/devre dışı | §2.5 – `systemctl disable firewalld` |
-| 10 | install-config.yaml oluştur | §2.6 – config şablonu |
-| 11 | Config yedeği al | §2.6 – `cp install-config.yaml ...` |
-| 12 | Cluster kur | §2.6 – `openshift-install create cluster` |
-| 13 | KUBECONFIG ayarla | §2.7 – `export KUBECONFIG=...` |
-| 14 | Infra MachineSet oluştur | §3.1 – `oc create -f machineset-infra.yaml` |
-| 15 | Infra node'larının hazır olmasını bekle | §3.1 – `oc get machines -w` |
-| 16 | Default storage class değiştir | §4.4 – ceph-rbd'yi default yap |
-
----
-
-## Önemli Notlar
-
-### Infra Node Taint'leri (§9.4)
-Taint'ler **kasıtlı olarak** bu playbook'a dahil edilmemiştir. Dokümanda belirtildiği gibi
-ODF toleration yapılandırması tamamlandıktan sonra manuel olarak uygulanmalıdır:
-
-```bash
-export KUBECONFIG=~/ocpinstall/ocp4/auth/kubeconfig
-
-oc adm taint nodes -l node-role.kubernetes.io/infra \
-    node-role.kubernetes.io/infra=reserved:NoSchedule
-
-oc adm taint nodes -l node-role.kubernetes.io/infra \
-    node-role.kubernetes.io/infra=reserved:NoExecute
-
-oc adm taint nodes -l node-role.kubernetes.io/infra \
-    node.ocs.openshift.io/storage=true:NoSchedule
+```
+Red Hat Pull Secret
+(https://console.redhat.com/openshift/install adresinden alın):
 ```
 
-### VMware Ekstra Disk (§3.2)
-Infra node'larına **1 TB ekstra disk** eklenmesi VMware arayüzünden yapılır
-(ODF storage havuzu için). Bu adım Ansible ile otomatize edilemez.
+> **Toplam süre:** ~2–2.5 saat  
+> (OCP cluster kurulumu ~60 dk, ODF StorageCluster Ready ~30 dk)
 
-### ODF Disk Tanıma Sorunu (§4.3)
-IBM Lab ortamında eklenen diskler SSD olarak tanınmayabilir. Bu durumda
-her storage node için debug pod üzerinden çalıştırın:
+---
+
+## Playbook Akışı
+
+`site.yml` tek komutla aşağıdaki tüm adımları sırayla işler:
+
+```
+site.yml
+│
+├── §2.1  Root geçişi          (become: true ile otomatik)
+├── §2.2  OCP binary indirme   wget → tar → /usr/local/bin
+├── §2.3  vCenter CA sertifika unzip → update-ca-trust
+├── §2.4  SSH key oluştur      ssh-keygen ed25519
+├── §2.5  Sistem hazırlığı     SELinux=disabled, firewalld durdur
+├── §2.6  install-config.yaml  OCP 4.14+ failureDomains formatı
+├── §2.6  Cluster kur          openshift-install create cluster (~60 dk)
+├── §2.7  KUBECONFIG ayarla    .bashrc + /etc/profile.d
+│
+├── §3.1  Infra MachineSet     worker YAML → python3 patch → oc create
+├── §3.1  Infra node bekle     machines Running olana kadar (maks 30 dk)
+│
+├── §3.2  Disk ekle (OTOMATİK) community.vmware ile:
+│         VM kapat → 1 TB disk ekle → VM başlat → node Ready bekle
+│
+└── import_playbook: plays/04_odf.yml
+    ├── §4.1  ODF Operatör     Namespace + OperatorGroup + Subscription
+    │         InstallPlan approve → CSV Succeeded bekle
+    ├── §4.1  Local Storage Op aynı akışla
+    ├── §4.3  Rotational fix   oc debug node → /sys/block/*/rotational=0
+    ├── §4.2  LocalVolumeSet   local-block → PV oluşmasını bekle
+    ├── §4.2  StorageCluster   ocs-storagecluster → Ready bekle (~30 dk)
+    └── §4.4  Default SC       thin-csi → ocs-storagecluster-ceph-rbd
+```
+
+**Bitince:** "ODF kurulumu başarıyla tamamlandı. Sonraki adım: §5 CP4I Catalog" mesajını görürsünüz.
+
+---
+
+## Sık Kullanılan Komutlar
 
 ```bash
-oc debug node/<node-name>
-chroot /host
-for disk in $(ls /sys/block/ | grep -E '^sd|^vd'); do
-  echo 0 > /sys/block/$disk/queue/rotational
-done
+# Sadece belirli bir adımdan itibaren çalıştır (tag eklenirse)
+ansible-playbook -i inventory/hosts.ini site.yml --start-at-task "ODF Operatör..."
+
+# Dry-run (değişiklik yapmadan ne yapacağını göster)
+ansible-playbook -i inventory/hosts.ini site.yml --check
+
+# Verbose çıktı (sorun gidermek için)
+ansible-playbook -i inventory/hosts.ini site.yml -vv
+
+# Sadece ODF adımlarını çalıştır
+ansible-playbook -i inventory/hosts.ini plays/04_odf.yml
 ```
 
 ---
 
 ## Güvenlik
 
-`group_vars/all.yml` içindeki hassas veriler (`vcenter_password`, `pull_secret`)
-**Ansible Vault** ile şifrelenmelidir:
+`group_vars/all.yml` dosyasına **asla** şifre veya secret yazmayın.  
+Pull secret playbook başında terminalden sorulur.  
+vCenter şifresi `/home/admin/vmware-ipi.yaml` üzerinde tutulur — bu dosyayı `600` izniyle koruyun:
 
 ```bash
-# Vault ile şifreli değişken dosyası oluştur
-ansible-vault encrypt group_vars/all.yml
+chmod 600 /home/admin/vmware-ipi.yaml
+```
 
-# Vault şifresiyle çalıştır
+Vault kullanmak isterseniz:
+
+```bash
+ansible-vault encrypt /home/admin/vmware-ipi.yaml
 ansible-playbook -i inventory/hosts.ini site.yml --ask-vault-pass
 ```
+
+---
+
+## Adım Tablosu (SGK_v5 Referansı)
+
+| Adım # | SGK_v5 § | Playbook Görevi |
+|--------|----------|----------------|
+| 1–4    | §2.2     | OCP binary indirme ve PATH |
+| 5–6    | §2.3     | vCenter CA sertifikası |
+| 7      | §2.4     | SSH key oluşturma |
+| 8–10   | §2.5     | Hostname / SELinux / Firewall |
+| 11–13  | §2.6     | install-config + cluster kurulumu |
+| 14     | §2.7     | KUBECONFIG |
+| 15–17  | §3.1     | Infra MachineSet |
+| 18     | §3.2     | Otomatik disk ekleme (vmware_guest_disk) |
+| 19     | §4.1     | ODF Operatör kurulumu |
+| 20     | §4.1     | Local Storage Operator |
+| 21     | §4.3     | Disk rotational fix |
+| 22     | §4.2     | LocalVolumeSet + StorageCluster |
+| 23     | §4.4     | Default StorageClass değişimi |
