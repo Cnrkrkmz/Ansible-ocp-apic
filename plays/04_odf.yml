@@ -1,0 +1,468 @@
+---
+# ============================================================
+#  SGK_v5.docx Bölüm 4 – OpenShift Data Foundation (ODF) Kurulumu
+#
+#  Kapsam:
+#    §4.1  ODF Operatörü ve Local Storage Operator kurulumu
+#    §4.2  StorageCluster oluşturma (local-block LocalVolumeSet)
+#    §4.3  Disk rotational fix (IBM Lab: SSD tanıma sorunu)
+#    §4.4  Default StorageClass değişimi
+#          thin-csi (default) → ocs-storagecluster-ceph-rbd
+#
+#  Ön koşul: infra node'larına 1 TB disk eklenmiş olmalıdır (§3.2).
+#  Bu play site.yml'den import_playbook ile çağrılır.
+# ============================================================
+- name: "ODF Kurulumu – §4 SGK_v5"
+  hosts: bastion
+  become: true
+  vars_files:
+    - ../group_vars/all.yml
+
+  vars:
+    kubeconfig_path: "{{ install_base_dir }}/ocp4/auth/kubeconfig"
+    odf_manifests_dir: "{{ install_base_dir }}/odf-manifests"
+
+  tasks:
+
+    - name: "ODF manifest dizinini oluştur"
+      ansible.builtin.file:
+        path: "{{ odf_manifests_dir }}"
+        state: directory
+        mode: "0755"
+
+    # ============================================================
+    # ADIM 19 – ODF Operatörü Kurulumu  (§4.1 SGK_v5)
+    #
+    # Döküman:
+    #   Namespace: openshift-storage
+    #   Update approval: Manual
+    # ============================================================
+
+    - name: "openshift-storage namespace manifesti yaz"
+      ansible.builtin.copy:
+        dest: "{{ odf_manifests_dir }}/01-odf-namespace.yaml"
+        mode: "0644"
+        content: |
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: openshift-storage
+            labels:
+              openshift.io/cluster-monitoring: "true"
+
+    - name: "openshift-storage namespace oluştur"
+      ansible.builtin.command:
+        cmd: "/usr/local/bin/oc apply -f {{ odf_manifests_dir }}/01-odf-namespace.yaml"
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      changed_when: true
+
+    - name: "ODF OperatorGroup manifesti yaz"
+      ansible.builtin.copy:
+        dest: "{{ odf_manifests_dir }}/02-odf-operatorgroup.yaml"
+        mode: "0644"
+        content: |
+          apiVersion: operators.coreos.com/v1
+          kind: OperatorGroup
+          metadata:
+            name: openshift-storage-operatorgroup
+            namespace: openshift-storage
+          spec:
+            targetNamespaces:
+              - openshift-storage
+
+    - name: "ODF OperatorGroup oluştur"
+      ansible.builtin.command:
+        cmd: "/usr/local/bin/oc apply -f {{ odf_manifests_dir }}/02-odf-operatorgroup.yaml"
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      changed_when: true
+
+    - name: "ODF Subscription manifesti yaz (Manual approval, §4.1)"
+      ansible.builtin.copy:
+        dest: "{{ odf_manifests_dir }}/03-odf-subscription.yaml"
+        mode: "0644"
+        content: |
+          apiVersion: operators.coreos.com/v1alpha1
+          kind: Subscription
+          metadata:
+            name: odf-operator
+            namespace: openshift-storage
+          spec:
+            channel: "{{ odf_channel }}"
+            installPlanApproval: Manual
+            name: odf-operator
+            source: redhat-operators
+            sourceNamespace: openshift-marketplace
+
+    - name: "ODF Subscription oluştur"
+      ansible.builtin.command:
+        cmd: "/usr/local/bin/oc apply -f {{ odf_manifests_dir }}/03-odf-subscription.yaml"
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      changed_when: true
+
+    - name: "ODF InstallPlan'ı bekle (approve öncesi mevcut olmalı)"
+      ansible.builtin.shell: |
+        /usr/local/bin/oc get installplan -n openshift-storage \
+          -o jsonpath='{.items[?(@.spec.approved==false)].metadata.name}'
+      args:
+        executable: /bin/bash
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      register: odf_installplan
+      until: odf_installplan.stdout | length > 0
+      retries: 30
+      delay: 20
+      changed_when: false
+
+    - name: "ODF InstallPlan'ı onayla"
+      ansible.builtin.command:
+        cmd: >
+          /usr/local/bin/oc patch installplan {{ odf_installplan.stdout | trim }}
+          -n openshift-storage --type merge
+          -p '{"spec":{"approved":true}}'
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      changed_when: true
+
+    - name: "ODF CSV'nin Succeeded olmasını bekle"
+      ansible.builtin.shell: |
+        /usr/local/bin/oc get csv -n openshift-storage \
+          --no-headers \
+          -o custom-columns='PHASE:.status.phase' \
+          | grep -v '^$' | head -1
+      args:
+        executable: /bin/bash
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      register: odf_csv_status
+      until: "'Succeeded' in odf_csv_status.stdout"
+      retries: 40
+      delay: 30
+      changed_when: false
+
+    - name: "ODF CSV durumu"
+      ansible.builtin.debug:
+        msg: "ODF CSV durumu: {{ odf_csv_status.stdout }}"
+
+    # ============================================================
+    # ADIM 20 – Local Storage Operator Kurulumu  (§4.1 SGK_v5)
+    # ============================================================
+
+    - name: "openshift-local-storage namespace manifesti yaz"
+      ansible.builtin.copy:
+        dest: "{{ odf_manifests_dir }}/04-lso-namespace.yaml"
+        mode: "0644"
+        content: |
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: openshift-local-storage
+
+    - name: "openshift-local-storage namespace oluştur"
+      ansible.builtin.command:
+        cmd: "/usr/local/bin/oc apply -f {{ odf_manifests_dir }}/04-lso-namespace.yaml"
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      changed_when: true
+
+    - name: "LSO OperatorGroup manifesti yaz"
+      ansible.builtin.copy:
+        dest: "{{ odf_manifests_dir }}/05-lso-operatorgroup.yaml"
+        mode: "0644"
+        content: |
+          apiVersion: operators.coreos.com/v1
+          kind: OperatorGroup
+          metadata:
+            name: local-storage-operatorgroup
+            namespace: openshift-local-storage
+          spec:
+            targetNamespaces:
+              - openshift-local-storage
+
+    - name: "LSO OperatorGroup oluştur"
+      ansible.builtin.command:
+        cmd: "/usr/local/bin/oc apply -f {{ odf_manifests_dir }}/05-lso-operatorgroup.yaml"
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      changed_when: true
+
+    - name: "LSO Subscription manifesti yaz (Manual approval, §4.1)"
+      ansible.builtin.copy:
+        dest: "{{ odf_manifests_dir }}/06-lso-subscription.yaml"
+        mode: "0644"
+        content: |
+          apiVersion: operators.coreos.com/v1alpha1
+          kind: Subscription
+          metadata:
+            name: local-storage-operator
+            namespace: openshift-local-storage
+          spec:
+            channel: "{{ lso_channel }}"
+            installPlanApproval: Manual
+            name: local-storage-operator
+            source: redhat-operators
+            sourceNamespace: openshift-marketplace
+
+    - name: "LSO Subscription oluştur"
+      ansible.builtin.command:
+        cmd: "/usr/local/bin/oc apply -f {{ odf_manifests_dir }}/06-lso-subscription.yaml"
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      changed_when: true
+
+    - name: "LSO InstallPlan'ı bekle"
+      ansible.builtin.shell: |
+        /usr/local/bin/oc get installplan -n openshift-local-storage \
+          -o jsonpath='{.items[?(@.spec.approved==false)].metadata.name}'
+      args:
+        executable: /bin/bash
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      register: lso_installplan
+      until: lso_installplan.stdout | length > 0
+      retries: 30
+      delay: 20
+      changed_when: false
+
+    - name: "LSO InstallPlan'ı onayla"
+      ansible.builtin.command:
+        cmd: >
+          /usr/local/bin/oc patch installplan {{ lso_installplan.stdout | trim }}
+          -n openshift-local-storage --type merge
+          -p '{"spec":{"approved":true}}'
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      changed_when: true
+
+    - name: "LSO CSV'nin Succeeded olmasını bekle"
+      ansible.builtin.shell: |
+        /usr/local/bin/oc get csv -n openshift-local-storage \
+          --no-headers \
+          -o custom-columns='PHASE:.status.phase' \
+          | grep -v '^$' | head -1
+      args:
+        executable: /bin/bash
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      register: lso_csv_status
+      until: "'Succeeded' in lso_csv_status.stdout"
+      retries: 40
+      delay: 30
+      changed_when: false
+
+    - name: "LSO CSV durumu"
+      ansible.builtin.debug:
+        msg: "LSO CSV durumu: {{ lso_csv_status.stdout }}"
+
+    # ============================================================
+    # ADIM 21 – Disk Rotational Fix  (§4.3 SGK_v5)
+    #
+    # IBM Lab ortamında eklenen diskler HDD olarak tanınır.
+    # ODF SSD olmayan diskleri kabul etmediğinden her storage
+    # node'unda /sys/block/<disk>/queue/rotational = 0 yapılır.
+    #
+    # Döküman komutu (her node için):
+    #   oc debug node/<node-name>
+    #   chroot /host
+    #   for disk in $(ls /sys/block/ | grep -E '^sd|^vd'); do
+    #     echo 0 > /sys/block/$disk/queue/rotational
+    #   done
+    # ============================================================
+
+    - name: "Infra node isimlerini al"
+      ansible.builtin.command:
+        cmd: >
+          /usr/local/bin/oc get nodes
+          -l node-role.kubernetes.io/infra
+          -o jsonpath='{.items[*].metadata.name}'
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      register: infra_node_names
+      changed_when: false
+
+    - name: "Infra node listesi"
+      ansible.builtin.debug:
+        msg: "Infra node'ları: {{ infra_node_names.stdout.split() }}"
+
+    - name: "Her infra node'unda disk rotational fix uygula (oc debug)"
+      ansible.builtin.shell: |
+        /usr/local/bin/oc debug node/{{ item }} -- \
+          chroot /host bash -c \
+          'for disk in $(ls /sys/block/ | grep -E "^sd|^vd"); do
+             echo "Fixing: /dev/$disk"
+             echo 0 > /sys/block/$disk/queue/rotational
+           done'
+      args:
+        executable: /bin/bash
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      loop: "{{ infra_node_names.stdout.split() }}"
+      changed_when: true
+      retries: 3
+      delay: 15
+
+    - name: "Rotational fix tamamlandı"
+      ansible.builtin.debug:
+        msg: >-
+          Tüm infra node'larında disk rotational=0 yapıldı.
+          ODF → Configure → Create Storage Cluster adımına geçiliyor.
+
+    # ============================================================
+    # ADIM 22 – LocalVolumeSet ve StorageCluster Oluşturma  (§4.2 SGK_v5)
+    #
+    # Döküman:
+    #   LocalVolumeSet ismi : local-block
+    #   "Disk on selected nodes" seçeneği
+    #   Infra label ile 3 node otomatik seçilir
+    #   "Taint nodes" seçilmeden ilerlenir
+    # ============================================================
+
+    - name: "LocalVolumeSet manifesti yaz (local-block, infra node'ları)"
+      ansible.builtin.copy:
+        dest: "{{ odf_manifests_dir }}/07-localvolumeset.yaml"
+        mode: "0644"
+        content: |
+          apiVersion: local.storage.openshift.io/v1alpha1
+          kind: LocalVolumeSet
+          metadata:
+            name: local-block
+            namespace: openshift-local-storage
+          spec:
+            nodeSelector:
+              nodeSelectorTerms:
+                - matchExpressions:
+                    - key: cluster.ocs.openshift.io/openshift-storage
+                      operator: Exists
+            storageClassName: local-block
+            volumeMode: Block
+            maxDeviceCount: 1
+            deviceInclusionSpec:
+              deviceTypes:
+                - disk
+              deviceMechanicalProperties:
+                - NonRotational
+
+    - name: "LocalVolumeSet oluştur"
+      ansible.builtin.command:
+        cmd: "/usr/local/bin/oc apply -f {{ odf_manifests_dir }}/07-localvolumeset.yaml"
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      changed_when: true
+
+    - name: "local-block PersistentVolume'larının oluşmasını bekle (en az {{ odf_pv_minimum }} PV)"
+      ansible.builtin.shell: |
+        /usr/local/bin/oc get pv \
+          -o jsonpath='{.items[?(@.spec.storageClassName=="local-block")].metadata.name}' \
+          | wc -w
+      args:
+        executable: /bin/bash
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      register: local_block_pv_count
+      until: local_block_pv_count.stdout | trim | int >= odf_pv_minimum | int
+      retries: 30
+      delay: 30
+      changed_when: false
+
+    - name: "Oluşan PV sayısı"
+      ansible.builtin.debug:
+        msg: "local-block PV sayısı: {{ local_block_pv_count.stdout | trim }}"
+
+    - name: "StorageCluster manifesti yaz (ocs-storagecluster)"
+      ansible.builtin.copy:
+        dest: "{{ odf_manifests_dir }}/08-storagecluster.yaml"
+        mode: "0644"
+        content: |
+          apiVersion: ocs.openshift.io/v1
+          kind: StorageCluster
+          metadata:
+            name: ocs-storagecluster
+            namespace: openshift-storage
+          spec:
+            storageDeviceSets:
+              - name: ocs-deviceset-local-block
+                count: 1
+                dataPVCTemplate:
+                  spec:
+                    accessModes:
+                      - ReadWriteOnce
+                    resources:
+                      requests:
+                        storage: "{{ odf_disk_size }}"
+                    storageClassName: local-block
+                    volumeMode: Block
+                replica: 3
+                portable: false
+
+    - name: "StorageCluster oluştur"
+      ansible.builtin.command:
+        cmd: "/usr/local/bin/oc apply -f {{ odf_manifests_dir }}/08-storagecluster.yaml"
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      changed_when: true
+
+    - name: "StorageCluster'ın Ready durumuna geçmesini bekle"
+      ansible.builtin.command:
+        cmd: >
+          /usr/local/bin/oc get storagecluster ocs-storagecluster
+          -n openshift-storage
+          -o jsonpath='{.status.phase}'
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      register: sc_phase
+      until: sc_phase.stdout == "Ready"
+      retries: 60
+      delay: 60
+      changed_when: false
+
+    - name: "StorageCluster durumu"
+      ansible.builtin.debug:
+        msg: "StorageCluster durumu: {{ sc_phase.stdout }}"
+
+    # ============================================================
+    # ADIM 23 – Default StorageClass Değişikliği  (§4.4 SGK_v5)
+    #
+    # Döküman:
+    #   thin-csi'dan default annotation'ı kaldır
+    #   ocs-storagecluster-ceph-rbd'ye default annotation ekle
+    # ============================================================
+
+    - name: "thin-csi'dan default StorageClass annotation'ını kaldır"
+      ansible.builtin.command:
+        cmd: >
+          /usr/local/bin/oc patch storageclass thin-csi --type json
+          -p '[{"op":"remove","path":"/metadata/annotations/storageclass.kubernetes.io~1is-default-class"}]'
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      changed_when: true
+      failed_when: false
+
+    - name: "ocs-storagecluster-ceph-rbd'yi default StorageClass yap"
+      ansible.builtin.command:
+        cmd: >
+          /usr/local/bin/oc patch storageclass ocs-storagecluster-ceph-rbd
+          --type merge
+          -p '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      changed_when: true
+
+    - name: "StorageClass listesini doğrula"
+      ansible.builtin.command:
+        cmd: "/usr/local/bin/oc get storageclass"
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      register: sc_list
+      changed_when: false
+
+    - name: "StorageClass listesi"
+      ansible.builtin.debug:
+        var: sc_list.stdout_lines
+
+    - name: "ODF kurulumu tamamlandı – §5'e geçmeye hazır"
+      ansible.builtin.debug:
+        msg: >-
+          ODF kurulumu başarıyla tamamlandı.
+          Sonraki adım: IBM CP4I ve APIC Catalog kurulumu (§5 SGK_v5).

@@ -67,10 +67,25 @@ worker_cores_per_socket: 2
 worker_memory_mb: 32768
 worker_disk_gb: 300
 
-# ---- Infra MachineSet Boyutlandırma (§3.1 SGK_v4) ----
+# ---- Infra MachineSet Boyutlandırma (§3.1 SGK_v5) ----
 infra_replicas: 3
 infra_cpus: 32
 infra_cores_per_socket: 2
 infra_memory_mb: 32768
 infra_disk_gb: 300
+
+# ---- Infra Ekstra Disk (§3.2 SGK_v5) ----
+# Her infra node'una eklenecek ODF diski (GB cinsinden)
+infra_extra_disk_gb: 1024
+
+# ---- ODF / Local Storage Operator (§4 SGK_v5) ----
+# Operatör kanalları – OCP 4.20 ile uyumlu sürümler
+odf_channel: "stable-4.16"      # ODF stable kanalı (OCP 4.20 ile uyumlu)
+lso_channel: "stable-4.16"      # Local Storage Operator kanalı
+
+# StorageCluster için disk boyutu (her infra node'daki ek diskin boyutu)
+odf_disk_size: "1Ti"
+
+# LocalVolumeSet PV beklemesi – en az bu kadar PV oluşmalı (3 node × 1 disk)
+odf_pv_minimum: 3
 

@@ -1,8 +1,13 @@
 ---
 # ============================================================
 #  OCP 4.20.17 – VMware IPI Tam Kurulum Playbook
-#  SGK_v4.docx Bölüm 2 (Adım 1–14) birebir esas alınmıştır.
+#  SGK_v5.docx Bölüm 2 ve 3 (Adım 1–17) birebir esas alınmıştır.
 #  Hedef: bastion host (RHEL 8)
+#
+#  Bu playbook tek başına çalıştırılır; ODF kurulumu
+#  plays/04_odf.yml içinde ayrı play olarak tanımlanmıştır.
+#  Tüm süreci tek komutla çalıştırmak için:
+#    ansible-playbook site.yml -i inventory/hosts.ini
 # ============================================================
 - name: "OCP 4.20.17 – Bastion Hazırlığı ve Kurulum"
   hosts: bastion
@@ -736,3 +741,143 @@
         var: infra_nodes.stdout_lines
 
 
+
+    # ============================================================
+    # ADIM 10 – Ekstra Disk Ekleme (§3.2 SGK_v5)
+    #
+    # community.vmware.vmware_guest_disk modülü ile her infra
+    # node'una otomatik olarak 1 TB disk eklenir.
+    #
+    # Gereksinimler (bastion host üzerinde):
+    #   pip install pyVmomi
+    #   ansible-galaxy collection install community.vmware
+    # ============================================================
+
+    - name: "pyVmomi kurulu olduğundan emin ol (community.vmware gereksinimi)"
+      ansible.builtin.pip:
+        name: pyVmomi
+        state: present
+
+    - name: "Infra Machine'lerin VMware providerID'lerini al"
+      ansible.builtin.command:
+        cmd: >
+          /usr/local/bin/oc get machines -n openshift-machine-api
+          -l machine.openshift.io/cluster-api-machine-role=infra
+          -o jsonpath='{.items[*].spec.providerSpec.value.template}'
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      register: infra_vm_templates_raw
+      changed_when: false
+
+    # OCP IPI, VM'leri "<cluster_name>-<id>-infra-<n>" adıyla oluşturur.
+    # Machine nesnelerinin metadata.name alanı doğrudan VMware VM adıdır.
+    - name: "Infra Machine adlarını (= VMware VM adları) al"
+      ansible.builtin.command:
+        cmd: >
+          /usr/local/bin/oc get machines -n openshift-machine-api
+          -l machine.openshift.io/cluster-api-machine-role=infra
+          -o jsonpath='{.items[*].metadata.name}'
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      register: infra_vm_names_raw
+      changed_when: false
+
+    - name: "Infra VM adlarını listeye dönüştür"
+      ansible.builtin.set_fact:
+        infra_vm_names: "{{ infra_vm_names_raw.stdout.split() }}"
+
+    - name: "Infra VM listesi"
+      ansible.builtin.debug:
+        msg: "Disk eklenecek VM'ler: {{ infra_vm_names }}"
+
+    - name: "Her infra VM'ini kapat (Shut Down Guest OS)"
+      community.vmware.vmware_guest_powerstate:
+        hostname:   "{{ vcenter_host }}"
+        username:   "{{ vcenter_username }}"
+        password:   "{{ vcenter_password }}"
+        validate_certs: false
+        datacenter: "{{ vcenter_datacenter }}"
+        folder:     "{{ vcenter_folder }}"
+        name:       "{{ item }}"
+        state:      shutdown-guest
+      loop: "{{ infra_vm_names }}"
+      loop_control:
+        label: "{{ item }}"
+
+    - name: "VM'lerin tamamen kapanmasını bekle (PoweredOff)"
+      community.vmware.vmware_guest_info:
+        hostname:   "{{ vcenter_host }}"
+        username:   "{{ vcenter_username }}"
+        password:   "{{ vcenter_password }}"
+        validate_certs: false
+        datacenter: "{{ vcenter_datacenter }}"
+        name:       "{{ item }}"
+      register: vm_info
+      until: vm_info.instance.hw_power_status == 'poweredOff'
+      retries: 20
+      delay: 15
+      loop: "{{ infra_vm_names }}"
+      loop_control:
+        label: "{{ item }}"
+      changed_when: false
+
+    - name: "Her infra VM'ine {{ infra_extra_disk_gb }} GB disk ekle"
+      community.vmware.vmware_guest_disk:
+        hostname:   "{{ vcenter_host }}"
+        username:   "{{ vcenter_username }}"
+        password:   "{{ vcenter_password }}"
+        validate_certs: false
+        datacenter: "{{ vcenter_datacenter }}"
+        folder:     "{{ vcenter_folder }}"
+        name:       "{{ item }}"
+        disk:
+          - size_gb:  "{{ infra_extra_disk_gb }}"
+            type:     thin
+            datastore: "{{ vcenter_datastore }}"
+            state:    present
+            scsi_type: paravirtual
+      loop: "{{ infra_vm_names }}"
+      loop_control:
+        label: "{{ item }}"
+
+    - name: "Her infra VM'ini yeniden başlat (power-on)"
+      community.vmware.vmware_guest_powerstate:
+        hostname:   "{{ vcenter_host }}"
+        username:   "{{ vcenter_username }}"
+        password:   "{{ vcenter_password }}"
+        validate_certs: false
+        datacenter: "{{ vcenter_datacenter }}"
+        folder:     "{{ vcenter_folder }}"
+        name:       "{{ item }}"
+        state:      powered-on
+      loop: "{{ infra_vm_names }}"
+      loop_control:
+        label: "{{ item }}"
+
+    - name: "Infra node'larının tekrar Ready olmasını bekle (disk ekleme sonrası)"
+      ansible.builtin.command:
+        cmd: >
+          /usr/local/bin/oc get nodes
+          -l node-role.kubernetes.io/infra
+          -o jsonpath='{.items[*].status.conditions[-1].type}'
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      register: infra_node_ready
+      until: >
+        infra_node_ready.stdout.split() | length == infra_replicas | int
+        and infra_node_ready.stdout.split() | unique == ['Ready']
+      retries: 40
+      delay: 30
+      changed_when: false
+
+    - name: "Disk ekleme tamamlandı"
+      ansible.builtin.debug:
+        msg: >-
+          {{ infra_vm_names | length }} infra node'una {{ infra_extra_disk_gb }} GB
+          disk eklendi ve tüm node'lar Ready durumuna geçti.
+
+# ============================================================
+# BÖLÜM 4 – ODF ve Local Storage Operator Kurulumu (§4 SGK_v5)
+# plays/04_odf.yml içinde tanımlanmıştır.
+# ============================================================
+- import_playbook: plays/04_odf.yml
