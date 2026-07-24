@@ -24,10 +24,24 @@ install_base_dir: "/root/ocpinstall"
 # cluster_dir pre_tasks'ta dinamik olarak set edilir
 
 # ---- Pull Secret ----
-# https://console.redhat.com/openshift/install adresinden alın
-# Ansible Vault ile şifrelemeniz önerilir:
-#   ansible-vault encrypt_string '<pull_secret>' --name pull_secret
-pull_secret: #buraya pull secret input alınacak kullanıcıya alınacak adresi sunabiliriz
+# https://console.redhat.com/openshift/install adresinden indirin.
+#
+# Bu değeri ASLA bu dosyaya yazmayın.
+# Aşağıdaki yöntemlerden birini kullanın:
+#
+#   1) Playbook çalışırken interaktif olarak girin (varsayılan):
+#        ansible-playbook site.yml -i inventory/hosts.ini
+#      Playbook, pull_secret değerini sizden otomatik olarak sorar.
+#
+#   2) Komut satırından geçirin (CI/CD ortamları için):
+#        ansible-playbook site.yml -i inventory/hosts.ini \
+#          -e "pull_secret='<içeriği buraya yapıştırın>'"
+#
+#   3) Ansible Vault ile şifreli değişken dosyası kullanın:
+#        ansible-vault encrypt_string '<pull_secret>' --name pull_secret >> group_vars/vault.yml
+#        ansible-playbook site.yml -i inventory/hosts.ini --ask-vault-pass
+#
+# pull_secret bu dosyada tanımlı DEĞİLDİR; site.yml vars_prompt üzerinden alınır.
 # ---- SSH Public Key (otomatik oluşturulacak) ----
 ssh_key_path: "/root/.ssh/id_ed25519"
 

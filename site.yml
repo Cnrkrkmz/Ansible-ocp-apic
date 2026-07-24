@@ -10,6 +10,20 @@
   vars_files:
     - group_vars/all.yml
 
+  # ============================================================
+  # Pull Secret – interaktif girdi
+  # Playbook başlarken terminal üzerinden sorulur; girilen değer
+  # ekranda gösterilmez (private: true).
+  # CI/CD ortamlarında: -e "pull_secret='...'" ile geçilebilir.
+  # ============================================================
+  vars_prompt:
+    - name: pull_secret
+      prompt: >-
+        Red Hat Pull Secret
+        (https://console.redhat.com/openshift/install adresinden alın)
+      private: true
+      confirm: false
+
   pre_tasks:
 
     # ============================================================
