@@ -288,11 +288,12 @@
 
     - name: "Her infra node'unda disk rotational fix uygula (oc debug)"
       ansible.builtin.shell: |
-        /usr/local/bin/oc debug node/{{ item }} -- \
+        /usr/local/bin/oc debug node/{{ item }} --timeout=120 -- \
           chroot /host bash -c \
-          'for disk in $(ls /sys/block/ | grep -E "^sd|^vd"); do
-             echo "Fixing: /dev/$disk"
+          'for disk in $(ls /sys/block/ | grep -E "^sd|^vd|^nvme"); do
+             echo "Fixing: /dev/$disk -> rotational=0"
              echo 0 > /sys/block/$disk/queue/rotational
+             cat /sys/block/$disk/queue/rotational
            done'
       args:
         executable: /bin/bash
@@ -309,6 +310,10 @@
           Tüm infra node'larında disk rotational=0 yapıldı.
           ODF → Configure → Create Storage Cluster adımına geçiliyor.
 
+    - name: "Rotational fix'in etkili olması için bekleniyor (30 sn)"
+      ansible.builtin.pause:
+        seconds: 30
+
     # ============================================================
     # ADIM 22 – LocalVolumeSet ve StorageCluster Oluşturma  (§4.2 SGK_v5)
     #
@@ -318,6 +323,36 @@
     #   Infra label ile 3 node otomatik seçilir
     #   "Taint nodes" seçilmeden ilerlenir
     # ============================================================
+
+    - name: "Infra node'larda openshift-storage label'ını doğrula"
+      ansible.builtin.shell: |
+        /usr/local/bin/oc get nodes \
+          -l cluster.ocs.openshift.io/openshift-storage \
+          -o jsonpath='{.items[*].metadata.name}'
+      args:
+        executable: /bin/bash
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      register: storage_labeled_nodes
+      changed_when: false
+
+    - name: "openshift-storage label'ı olan node'lar"
+      ansible.builtin.debug:
+        msg: "openshift-storage label'lı node'lar: '{{ storage_labeled_nodes.stdout }}'"
+
+    - name: "openshift-storage label eksikse infra node'larına ekle"
+      ansible.builtin.shell: |
+        for node in {{ infra_node_names.stdout }}; do
+          /usr/local/bin/oc label node "$node" \
+            cluster.ocs.openshift.io/openshift-storage='' \
+            --overwrite
+        done
+      args:
+        executable: /bin/bash
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      when: storage_labeled_nodes.stdout | length == 0
+      changed_when: true
 
     - name: "LocalVolumeSet manifesti yaz (local-block, infra node'ları)"
       ansible.builtin.copy:
@@ -362,13 +397,32 @@
         KUBECONFIG: "{{ kubeconfig_path }}"
       register: local_block_pv_count
       until: local_block_pv_count.stdout | trim | int >= odf_pv_minimum | int
-      retries: 30
+      retries: 40
       delay: 30
       changed_when: false
 
     - name: "Oluşan PV sayısı"
       ansible.builtin.debug:
         msg: "local-block PV sayısı: {{ local_block_pv_count.stdout | trim }}"
+
+    - name: "PV'lerin Available durumuna geçmesini bekle"
+      ansible.builtin.shell: |
+        /usr/local/bin/oc get pv \
+          -o jsonpath='{.items[?(@.spec.storageClassName=="local-block")].status.phase}' \
+          | tr ' ' '\n' | grep -c "^Available$" || true
+      args:
+        executable: /bin/bash
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      register: available_pv_count
+      until: available_pv_count.stdout | trim | int >= odf_pv_minimum | int
+      retries: 20
+      delay: 15
+      changed_when: false
+
+    - name: "Available PV sayısı"
+      ansible.builtin.debug:
+        msg: "Available local-block PV sayısı: {{ available_pv_count.stdout | trim }}"
 
     - name: "StorageCluster manifesti yaz (ocs-storagecluster)"
       ansible.builtin.copy:
@@ -403,23 +457,39 @@
         KUBECONFIG: "{{ kubeconfig_path }}"
       changed_when: true
 
-    - name: "StorageCluster'ın Ready durumuna geçmesini bekle"
+    - name: "StorageCluster'ın Ready durumuna geçmesini bekle (~10-20 dk)"
       ansible.builtin.command:
         cmd: >
           /usr/local/bin/oc get storagecluster ocs-storagecluster
           -n openshift-storage
-          -o jsonpath='{.status.phase}'
+          -o jsonpath={.status.phase}
       environment:
         KUBECONFIG: "{{ kubeconfig_path }}"
       register: sc_phase
       until: sc_phase.stdout == "Ready"
-      retries: 60
-      delay: 60
+      retries: 80
+      delay: 30
       changed_when: false
 
     - name: "StorageCluster durumu"
       ansible.builtin.debug:
         msg: "StorageCluster durumu: {{ sc_phase.stdout }}"
+
+    - name: "StorageCluster condition detayları (hata araştırma)"
+      ansible.builtin.shell: |
+        /usr/local/bin/oc get storagecluster ocs-storagecluster \
+          -n openshift-storage \
+          -o jsonpath='{range .status.conditions[*]}{.type}{"\t"}{.status}{"\t"}{.message}{"\n"}{end}'
+      args:
+        executable: /bin/bash
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      register: sc_conditions
+      changed_when: false
+
+    - name: "StorageCluster condition'ları"
+      ansible.builtin.debug:
+        var: sc_conditions.stdout_lines
 
     # ============================================================
     # ADIM 23 – Default StorageClass Değişikliği  (§4.4 SGK_v5)

@@ -739,6 +739,11 @@
 # ============================================================
 #  OCP 4.x – ODF ve Local Storage Kurulumu Playbook
 #  SGK_v5.docx Bölüm 4 (Adım 19-23) esas alınmıştır.
+#
+#  NOT: IBM Lab ortamında StorageCluster "Progressing" durumunda
+#  takılabiliyor. Bu play hata verse bile bir sonraki play
+#  (APIC kurulumu) devam eder. ODF'i atlamak için:
+#    ansible-playbook site.yml --skip-tags odf
 # ============================================================
 - name: "OCP 4.x – OpenShift Data Foundation (ODF) Kurulumu"
   hosts: bastion
@@ -747,6 +752,7 @@
     - group_vars/all.yml
   vars:
     kubeconfig_path: "{{ install_base_dir }}/ocp4/auth/kubeconfig"
+  ignore_errors: true
 
   tasks:
 
@@ -963,7 +969,7 @@
     
     - name: "StorageCluster'ın Ready ve Healthy durumuna geçmesini bekle (~5-10 dk)"
       ansible.builtin.command:
-        cmd: "/usr/local/bin/oc get storagecluster ocs-storagecluster -n openshift-storage -o jsonpath='{.status.phase}'"
+        cmd: "/usr/local/bin/oc get storagecluster ocs-storagecluster -n openshift-storage -o jsonpath={.status.phase}"
       environment:
         KUBECONFIG: "{{ kubeconfig_path }}"
       register: sc_status
@@ -971,6 +977,8 @@
       retries: 40
       delay: 30
       changed_when: false
+      # IBM Lab'da StorageCluster takılırsa playbook devam etsin
+      ignore_errors: true
 
     # ============================================================
     # 6. Default Storage Class Değişikliği
@@ -989,3 +997,9 @@
       environment:
         KUBECONFIG: "{{ kubeconfig_path }}"
       changed_when: true
+      ignore_errors: true
+
+# ============================================================
+#  CP4I + APIC Kurulumu
+# ============================================================
+- import_playbook: plays/05_apic.yml
