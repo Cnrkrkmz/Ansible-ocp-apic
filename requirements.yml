@@ -1,9 +1,9 @@
 ---
-# Ansible koleksiyon gereksinimleri
-# Kurulum: ansible-galaxy collection install -r requirements.yml
-#
-# NOT: vmware.vmware koleksiyonu Python 3.10+ gerektirir.
-# Bastion Python 3.6 ise community.vmware yeterlidir.
 collections:
   - name: community.vmware
-    version: ">=4.0.0"
+    version: "6.2.1"
+
+  # community.vmware 6.x bazı ortak modül yardımcılarını
+  # vmware.vmware koleksiyonundan kullanır.
+  - name: vmware.vmware
+    version: "2.9.0"

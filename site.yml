@@ -1,11 +1,10 @@
 ---
 # ============================================================
 #  OCP 4.20.17 – VMware IPI Tam Kurulum Playbook
-#  SGK_v5.docx Bölüm 2 ve 3 (Adım 1–17) birebir esas alınmıştır.
 #  Hedef: bastion host (RHEL 8)
 #
 #  Bu playbook tek başına çalıştırılır; ODF kurulumu
-#  plays/04_odf.yml içinde ayrı play olarak tanımlanmıştır.
+#  dosyanın sonundaki ikinci "play" olarak eklenmiştir.
 #  Tüm süreci tek komutla çalıştırmak için:
 #    ansible-playbook site.yml -i inventory/hosts.ini
 # ============================================================
@@ -17,9 +16,6 @@
 
   # ============================================================
   # Pull Secret – interaktif girdi
-  # Playbook başlarken terminal üzerinden sorulur; girilen değer
-  # ekranda gösterilmez (private: true).
-  # CI/CD ortamlarında: -e "pull_secret='...'" ile geçilebilir.
   # ============================================================
   vars_prompt:
     - name: pull_secret
@@ -70,43 +66,10 @@
         machine_network_cidr:  "192.168.252.0/24"
         cluster_dir:           "{{ install_base_dir }}/ocp4"
 
-    - name: "Okunan vSphere değişkenlerini göster (özet)"
-      ansible.builtin.debug:
-        msg:
-          - "vCenter   : {{ vcenter_host }}"
-          - "Datacenter: {{ vcenter_datacenter }}"
-          - "Cluster   : {{ vcenter_cluster }}"
-          - "Datastore : {{ vcenter_datastore }}"
-          - "Network   : {{ vcenter_network }}"
-          - "Folder    : {{ vcenter_folder }}"
-          - "ResPool   : {{ vcenter_resource_pool }}"
-          - "API VIP   : {{ vsphere_api_vip }}"
-          - "Ingress   : {{ vsphere_ingress_vip }}"
-          - "Cluster   : {{ cluster_name }}.{{ base_domain }}"
-          - "MachNet   : {{ machine_network_cidr }}"
-
   tasks:
 
     # ============================================================
-    # ADIM 1 – Root kullanıcısına geçiş  (§2.1)
-    # Ansible become: true ile zaten root olarak çalışıyor.
-    # ============================================================
-
-    # ============================================================
-    # ADIM 2 – Kurulum dizinini oluştur ve dosyaları indir  (§2.2)
-    #
-    # Döküman komutu:
-    #   mkdir ocpinstall && cd ocpinstall
-    #   wget <client-url>
-    #   wget <install-url>
-    #   tar -xvf openshift-client-linux-4.20.17.tar.gz
-    #   tar -xvf openshift-install-linux-4.20.17.tar.gz
-    #   mv oc kubectl openshift-install /usr/local/bin/
-    #
-    # RHEL 8 notu: OCP 4.20 standart oc/kubectl binary'leri
-    # GLIBC 2.32+ gerektirir. RHEL 8'de bu sürüm yoktur.
-    # Bu nedenle openshift-client-linux-amd64-rhel8 tarball'ı
-    # kullanılır. Ref: https://access.redhat.com/solutions/7077895
+    # ADIM 2 – Kurulum dizinini oluştur ve dosyaları indir
     # ============================================================
     - name: "Kurulum dizinini oluştur: {{ install_base_dir }}"
       ansible.builtin.file:
@@ -146,7 +109,7 @@
       ansible.builtin.command:
         cmd: "mv {{ install_base_dir }}/oc {{ install_base_dir }}/kubectl /usr/local/bin/"
       changed_when: true
-      failed_when: false  # RHEL 8'de GLIBC hatasıyla çalışmayabilir, devam et
+      failed_when: false
 
     - name: "oc binary GLIBC uyumluluğunu kontrol et"
       ansible.builtin.command:
@@ -158,15 +121,6 @@
     - name: "GLIBC uyumsuzluğu var mı?"
       ansible.builtin.set_fact:
         need_rhel8_client: "{{ 'GLIBC' in oc_glibc_check.stderr or oc_glibc_check.rc != 0 }}"
-
-    - name: "GLIBC durumunu göster"
-      ansible.builtin.debug:
-        msg: >-
-          {% if need_rhel8_client %}
-          GLIBC uyumsuzluğu tespit edildi – RHEL 8 uyumlu tarball indiriliyor.
-          {% else %}
-          Standart oc/kubectl uyumlu, ek işlem gerekmez.
-          {% endif %}
 
     # RHEL 8 uyumlu tarball – sadece GLIBC hatası varsa
     - name: "Standart oc/kubectl binary'lerini kaldır (RHEL 8 için)"
@@ -209,33 +163,8 @@
         cmd: "mv {{ install_base_dir }}/openshift-install /usr/local/bin/openshift-install"
         creates: "/usr/local/bin/openshift-install"
 
-    - name: "oc versiyonunu doğrula"
-      ansible.builtin.command:
-        cmd: "/usr/local/bin/oc version --client"
-      register: oc_version_final
-      changed_when: false
-
-    - name: "openshift-install versiyonunu doğrula"
-      ansible.builtin.command:
-        cmd: "/usr/local/bin/openshift-install version"
-      register: ocp_install_version_final
-      changed_when: false
-
-    - name: "Binary versiyonlarını göster"
-      ansible.builtin.debug:
-        msg:
-          - "{{ oc_version_final.stdout }}"
-          - "{{ ocp_install_version_final.stdout_lines[0] }}"
-
     # ============================================================
-    # ADIM 3 – Trusted Root CA sertifikası  (§2.3)
-    #
-    # Döküman komutu:
-    #   wget --no-check-certificate \
-    #     https://<vcenter>/certs/download.zip
-    #   unzip download.zip
-    #   cp certs/lin/* /etc/pki/ca-trust/source/anchors
-    #   update-ca-trust extract
+    # ADIM 3 – Trusted Root CA sertifikası
     # ============================================================
     - name: "unzip paketi yüklü olduğundan emin ol"
       ansible.builtin.command:
@@ -266,12 +195,7 @@
       changed_when: true
 
     # ============================================================
-    # ADIM 4 – SSH Key Oluşturma  (§2.4)
-    #
-    # Döküman komutu:
-    #   ssh-keygen -t ed25519 -N '' -f ~/.ssh/id_ed25519
-    #   eval "$(ssh-agent -s)"
-    #   ssh-add ~/.ssh/id_ed25519
+    # ADIM 4 – SSH Key Oluşturma
     # ============================================================
     - name: "SSH key zaten var mı kontrol et"
       ansible.builtin.stat:
@@ -301,20 +225,8 @@
       ansible.builtin.set_fact:
         ssh_public_key: "{{ ssh_pub_key_b64.content | b64decode | trim }}"
 
-    - name: "SSH public key'i göster"
-      ansible.builtin.debug:
-        msg: "SSH Public Key: {{ ssh_public_key }}"
-
     # ============================================================
-    # ADIM 5 – Sistem Hazırlığı  (§2.5)
-    #
-    # Döküman komutu:
-    #   hostname  (doğrulama)
-    #   vi /etc/hostname  (gerekirse)
-    #   vi /etc/selinux/config  → SELINUX=disabled
-    #   systemctl stop firewalld
-    #   systemctl disable firewalld
-    #   systemctl status firewalld
+    # ADIM 5 – Sistem Hazırlığı
     # ============================================================
     - name: "Hostname doğrula ve ayarla"
       ansible.builtin.hostname:
@@ -339,30 +251,8 @@
       changed_when: true
       failed_when: false
 
-    - name: "Firewall servis durumunu göster (systemctl status firewalld)"
-      ansible.builtin.command:
-        cmd: "systemctl status firewalld"
-      register: firewalld_status
-      changed_when: false
-      failed_when: false
-
-    - name: "Firewalld durumu"
-      ansible.builtin.debug:
-        var: firewalld_status.stdout_lines
-
     # ============================================================
-    # ADIM 6 – Cluster Kurulum Dosyasının Oluşturulması  (§2.6)
-    #
-    # Döküman akışı:
-    #   1. openshift-install create install-config --dir=ocp4
-    #      (sihirbaz çalışır, gerçek install-config.yaml oluşur)
-    #   2. vi ocp4/install-config.yaml
-    #      – compute/controlPlane boyutları güncellenir
-    #      – machineNetwork, resourcePool, folder eklenir/düzeltilir
-    #   3. cp ocp4/install-config.yaml install-config.yaml  (yedek)
-    #
-    # Ansible burada sihirbaza cevapları pipe ederek çalıştırır,
-    # ardından oluşan gerçek YAML dosyasını python3 ile patch atar.
+    # ADIM 6 – Cluster Kurulum Dosyasının Oluşturulması
     # ============================================================
     - name: "ocp4 dizinini oluştur"
       ansible.builtin.file:
@@ -370,15 +260,6 @@
         state: directory
         mode: "0755"
 
-    # Sihirbaz SSH key sorusunu interaktif liste olarak soruyor,
-    # pipe ile bypass edilemiyor (EOF hatası). Bu nedenle sihirbazın
-    # ürettiği gerçek OCP 4.14+ formatını (failureDomains + vcenters)
-    # baz alarak dosyayı direkt yazıyoruz.
-    # Döküman §2.6 adım 12'deki vi düzenlemesi burada otomatik yapılıyor:
-    #   - compute/controlPlane platform boyutları ekleniyor
-    #   - machineNetwork 192.168.252.0/24 olarak düzeltiliyor
-    #   - resourcePool tam yolu ekleniyor
-    #   - folder ekleniyor (sihirbaz oluşturmuyor)
     - name: "install-config.yaml'ı oluştur (OCP 4.14+ failureDomains formatı)"
       ansible.builtin.copy:
         dest: "{{ cluster_dir }}/install-config.yaml"
@@ -453,26 +334,13 @@
           pullSecret: '{{ pull_secret }}'
           sshKey: '{{ ssh_public_key }}'
 
-    - name: "install-config.yaml içeriğini göster (doğrulama)"
-      ansible.builtin.command:
-        cmd: "cat {{ cluster_dir }}/install-config.yaml"
-      register: install_config_content
-      changed_when: false
-
-    - name: "install-config.yaml içeriği"
-      ansible.builtin.debug:
-        var: install_config_content.stdout_lines
-
     - name: "Config yedeği al (cp ocp4/install-config.yaml install-config.yaml)"
       ansible.builtin.command:
         cmd: "cp {{ cluster_dir }}/install-config.yaml {{ install_base_dir }}/install-config.yaml"
       changed_when: true
 
     # ============================================================
-    # ADIM 7 – Cluster kurulumunu başlat  (§2.6, Adım 13)
-    #
-    # Döküman komutu:
-    #   ./openshift-install create cluster --dir ./ocp4 --log-level=info
+    # ADIM 7 – Cluster kurulumunu başlat
     # ============================================================
     - name: "Cluster zaten kurulu mu kontrol et (auth/kubeconfig var mı?)"
       ansible.builtin.stat:
@@ -489,15 +357,8 @@
       async: 7200
       poll: 60
 
-    - name: "Kurulum çıktısını göster"
-      ansible.builtin.debug:
-        var: ocp_install_result.stdout_lines
-
     # ============================================================
-    # ADIM 8 – Cluster'a Erişim  (§2.7)
-    #
-    # Döküman komutu:
-    #   export KUBECONFIG=ocp4/auth/kubeconfig
+    # ADIM 8 – Cluster'a Erişim
     # ============================================================
     - name: "KUBECONFIG'i root .bashrc'ye ekle (export KUBECONFIG=...)"
       ansible.builtin.lineinfile:
@@ -525,43 +386,9 @@
       ansible.builtin.set_fact:
         kubeconfig_path: "{{ cluster_dir }}/auth/kubeconfig"
 
-    - name: "Cluster node'larını listele (oc get nodes)"
-      ansible.builtin.command:
-        cmd: "/usr/local/bin/oc get nodes"
-      environment:
-        KUBECONFIG: "{{ kubeconfig_path }}"
-      register: node_list
-      changed_when: false
-
-    - name: "Node listesi"
-      ansible.builtin.debug:
-        var: node_list.stdout_lines
-
     # ============================================================
-    # ADIM 9 – Infra MachineSet oluştur  (§3.1)
-    #
-    # Döküman komutu:
-    #   oc get machinesets <worker-ms-adı> -n openshift-machine-api -o yaml > machineset-infra.yaml
-    #   vi machineset-infra.yaml   (infra role/labels + boyutlar)
-    #   oc create -f machineset-infra.yaml
-    #   oc get machines -n openshift-machine-api -w
-    #
-    # Önemli: template alanı (örn. ocpinstall-7smbl-rhcos-generated-failure-domain)
-    # kurulum sonrası belli olur, önceden yazılamaz. Bu nedenle worker machineset'in
-    # YAML'ı cluster'dan alınıp python3 ile patch edilir — dökümanın vi adımı budur.
+    # ADIM 9 – Infra MachineSet oluştur
     # ============================================================
-    - name: "Mevcut worker machinesetleri listele (oc get machinesets)"
-      ansible.builtin.command:
-        cmd: "/usr/local/bin/oc get machinesets -n openshift-machine-api"
-      environment:
-        KUBECONFIG: "{{ kubeconfig_path }}"
-      register: machinesets_list
-      changed_when: false
-
-    - name: "MachineSet listesi"
-      ansible.builtin.debug:
-        var: machinesets_list.stdout_lines
-
     - name: "Worker MachineSet adını al (ilk worker machineset)"
       ansible.builtin.command:
         cmd: >
@@ -576,10 +403,6 @@
       ansible.builtin.set_fact:
         worker_machineset_name: "{{ worker_ms_name.stdout.split()[0] }}"
 
-    - name: "Worker MachineSet adını göster"
-      ansible.builtin.debug:
-        msg: "Worker MachineSet: {{ worker_machineset_name }}"
-
     - name: "Worker MachineSet YAML'ını al (oc get machineset -o yaml)"
       ansible.builtin.command:
         cmd: >
@@ -590,26 +413,12 @@
       register: worker_ms_yaml_raw
       changed_when: false
 
-    # Döküman §3.1: worker YAML'ı alıp infra olarak düzenleme (vi adımı)
-    # python3 ile:
-    #   - metadata temizlenir (managedFields, uid, resourceVersion, creationTimestamp)
-    #   - name: <infra-id>-infra-0 yapılır
-    #   - role/type label'ları infra yapılır
-    #   - node-role infra label'ı eklenir
-    #   - cluster.ocs.openshift.io/openshift-storage label'ı eklenir (ODF için)
-    #   - lifecycleHooks: {} eklenir
-    #   - replicas infra_replicas yapılır
-    #   - numCPUs, numCoresPerSocket, memoryMiB, diskGiB güncellenir
-    #   - annotations (memoryMb, vCPU) güncellenir
-    #   - resourcePool ve folder vmware-ipi.yaml'dan gelen değerlerle güncellenir
-    # Worker YAML'ını önce geçici dosyaya yaz
     - name: "Worker MachineSet YAML'ını geçici dosyaya yaz"
       ansible.builtin.copy:
         dest: "{{ install_base_dir }}/worker-ms-raw.yaml"
         content: "{{ worker_ms_yaml_raw.stdout }}"
         mode: "0644"
 
-    # Python script'ini Ansible değişkenleriyle doldurarak dosyaya yaz
     - name: "Python patch script'ini oluştur"
       ansible.builtin.copy:
         dest: "{{ install_base_dir }}/patch-infra-ms.py"
@@ -620,7 +429,6 @@
           with open("{{ install_base_dir }}/worker-ms-raw.yaml", "r") as f:
               ms = yaml.safe_load(f)
 
-          # cluster prefix'i al: ocpinstall-7smbl-worker-0 → ocpinstall-7smbl
           ms_name = ms['metadata']['name']
           if '-worker' in ms_name:
               cluster_prefix = ms_name.split('-worker')[0]
@@ -628,7 +436,6 @@
               cluster_prefix = '-'.join(ms_name.split('-')[:-2])
           infra_name = cluster_prefix + '-infra-0'
 
-          # metadata temizle
           for field in ('managedFields', 'uid', 'resourceVersion', 'generation',
                         'creationTimestamp', 'finalizers'):
               ms['metadata'].pop(field, None)
@@ -645,11 +452,9 @@
               'machine.openshift.io/cluster-api-cluster': cluster_id
           }
 
-          # spec
           ms['spec']['replicas'] = {{ infra_replicas }}
           ms['spec']['selector']['matchLabels']['machine.openshift.io/cluster-api-machineset'] = infra_name
 
-          # template metadata labels — worker'ı infra yap
           ms['spec']['template']['metadata']['labels'] = {
               'machine.openshift.io/cluster-api-cluster':      cluster_id,
               'machine.openshift.io/cluster-api-machine-role': 'infra',
@@ -657,14 +462,12 @@
               'machine.openshift.io/cluster-api-machineset':   infra_name,
           }
 
-          # node role labels — sadece infra (worker yok)
           ms['spec']['template']['spec'].setdefault('metadata', {})['labels'] = {
               'node-role.kubernetes.io/infra':              '',
               'cluster.ocs.openshift.io/openshift-storage': '',
           }
           ms['spec']['template']['spec']['lifecycleHooks'] = {}
 
-          # providerSpec değerleri
           pv = ms['spec']['template']['spec']['providerSpec']['value']
           pv['numCPUs']           = {{ infra_cpus }}
           pv['numCoresPerSocket'] = {{ infra_cores_per_socket }}
@@ -680,22 +483,10 @@
           with open('{{ install_base_dir }}/machineset-infra.yaml', 'w') as f:
               yaml.dump(ms, f, default_flow_style=False, allow_unicode=True)
 
-          print("machineset-infra.yaml olusturuldu: " + infra_name)
-
     - name: "Worker YAML'ını infra olarak düzenle (python3 patch)"
       ansible.builtin.command:
         cmd: "python3 {{ install_base_dir }}/patch-infra-ms.py"
       changed_when: true
-
-    - name: "Oluşturulan machineset-infra.yaml içeriğini göster"
-      ansible.builtin.command:
-        cmd: "cat {{ install_base_dir }}/machineset-infra.yaml"
-      register: ms_infra_content
-      changed_when: false
-
-    - name: "machineset-infra.yaml içeriği"
-      ansible.builtin.debug:
-        var: ms_infra_content.stdout_lines
 
     - name: "Infra MachineSet'i oluştur (oc create -f machineset-infra.yaml)"
       ansible.builtin.command:
@@ -707,10 +498,6 @@
       failed_when:
         - ms_create.rc != 0
         - "'AlreadyExists' not in ms_create.stderr"
-
-    - name: "MachineSet oluşturma sonucu"
-      ansible.builtin.debug:
-        var: ms_create.stdout
 
     - name: "Infra node'larının provisioning tamamlanmasını bekle (oc get machines -w)"
       ansible.builtin.command:
@@ -728,156 +515,477 @@
       delay: 30
       changed_when: false
 
-    - name: "Infra node'larını doğrula"
+    # ============================================================
+    # ADIM 10 – Ekstra Disk Ekleme ve Otomatik Python Yapılandırması
+    # ============================================================
+    - name: "ADIM 10 | VMware işlemleri için Python 3.11 paketini kur (RHEL 8 uyumlu)"
+      ansible.builtin.package:
+        name: python311
+        state: present
+      tags:
+        - disk
+
+    - name: "ADIM 10 | pyVmomi ve bağımlılıklarını pip3.11 ile kur"
+      ansible.builtin.pip:
+        name:
+          - pyvmomi==9.1.0.0
+          - requests>=2.31.0
+        executable: pip3.11
+      tags:
+        - disk
+
+    - name: "ADIM 10 | Sonraki VMware görevleri için Python Yorumlayıcısını güncelle"
+      ansible.builtin.set_fact:
+        ansible_python_interpreter: /usr/bin/python3.11
+      tags:
+        - disk
+
+    - name: "ADIM 10 | Disk işlemi değişkenlerini yeniden yükle"
+      ansible.builtin.include_vars:
+        file: /home/admin/vmware-ipi.yaml
+        name: disk_vmware_ipi
+      tags:
+        - disk
+
+    - name: "ADIM 10 | Disk işlemi fact değişkenlerini oluştur"
+      ansible.builtin.set_fact:
+        vcenter_host: "{{ disk_vmware_ipi.vsphere_hostname }}"
+        vcenter_hostname: "{{ disk_vmware_ipi.vsphere_hostname }}"
+        vcenter_username: "{{ disk_vmware_ipi.vsphere_username }}"
+        vcenter_password: "{{ disk_vmware_ipi.vsphere_password }}"
+        vcenter_datacenter: "{{ disk_vmware_ipi.vsphere_datacenter }}"
+        vcenter_cluster: "{{ disk_vmware_ipi.vsphere_cluster }}"
+        vcenter_network: "{{ disk_vmware_ipi.vsphere_network }}"
+        vcenter_datastore: "{{ disk_vmware_ipi.vsphere_datastore }}"
+        vcenter_resource_pool: "{{ disk_vmware_ipi.vsphere_resource_pool }}"
+        vcenter_folder: "{{ disk_vmware_ipi.vsphere_folder }}"
+        cluster_name: "{{ disk_vmware_ipi.cluster_name }}"
+        base_domain: "{{ disk_vmware_ipi.base_domain }}"
+        cluster_dir: "{{ install_base_dir }}/ocp4"
+        kubeconfig_path: "{{ install_base_dir }}/ocp4/auth/kubeconfig"
+      no_log: true
+      tags:
+        - disk
+
+    - name: "ADIM 10 | Infra Machine adlarını al"
       ansible.builtin.command:
-        cmd: "/usr/local/bin/oc get nodes -l node-role.kubernetes.io/infra"
+        cmd: >-
+          /usr/local/bin/oc get machines
+          -n openshift-machine-api
+          -l machine.openshift.io/cluster-api-machine-role=infra
+          -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}'
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      register: infra_vm_names_raw
+      changed_when: false
+      tags:
+        - disk
+
+    - name: "ADIM 10 | Infra VM adlarını listeye dönüştür"
+      ansible.builtin.set_fact:
+        infra_vm_names: >-
+          {{
+            infra_vm_names_raw.stdout_lines
+            | map('trim')
+            | reject('equalto', '')
+            | list
+          }}
+      tags:
+        - disk
+
+    - name: "ADIM 10 | Infra VM'leri guest shutdown ile kapat"
+      community.vmware.vmware_guest_powerstate:
+        hostname: "{{ vcenter_host }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: false
+        folder: "{{ vcenter_folder }}"
+        name: "{{ item }}"
+        state: shutdown-guest
+        state_change_timeout: 300
+      loop: "{{ infra_vm_names }}"
+      loop_control:
+        label: "{{ item }}"
+      no_log: true
+      tags:
+        - disk
+
+    - name: "ADIM 10 | VM'lerin poweredOff olmasını bekle"
+      community.vmware.vmware_guest_info:
+        hostname: "{{ vcenter_host }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: false
+        datacenter: "{{ vcenter_datacenter }}"
+        folder: "{{ vcenter_folder }}"
+        name: "{{ item }}"
+      loop: "{{ infra_vm_names }}"
+      loop_control:
+        label: "{{ item }}"
+      register: disk_vm_poweroff_info
+      until:
+        - disk_vm_poweroff_info.instance is defined
+        - disk_vm_poweroff_info.instance.hw_power_status == "poweredOff"
+      retries: 20
+      delay: 15
+      changed_when: false
+      no_log: true
+      tags:
+        - disk
+
+    - name: "ADIM 10 | disk.EnableUUID ayarını etkinleştir"
+      community.vmware.vmware_guest:
+        hostname: "{{ vcenter_host }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: false
+        datacenter: "{{ vcenter_datacenter }}"
+        folder: "{{ vcenter_folder }}"
+        name: "{{ item }}"
+        state: present
+        advanced_settings:
+          - key: disk.EnableUUID
+            value: "TRUE"
+      loop: "{{ infra_vm_names }}"
+      loop_control:
+        label: "{{ item }}"
+      no_log: true
+      tags:
+        - disk
+
+    - name: "ADIM 10 | Her infra VM'e ek disk ekle"
+      community.vmware.vmware_guest_disk:
+        hostname: "{{ vcenter_host }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: false
+        datacenter: "{{ vcenter_datacenter }}"
+        folder: "{{ vcenter_folder }}"
+        name: "{{ item }}"
+        disk:
+          - size_gb: "{{ infra_extra_disk_gb | int }}"
+            type: thin
+            datastore: "{{ vcenter_datastore }}"
+            state: present
+            scsi_controller: 0
+            unit_number: 1
+            scsi_type: paravirtual
+            disk_mode: persistent
+      loop: "{{ infra_vm_names }}"
+      loop_control:
+        label: "{{ item }}"
+      register: disk_add_result
+      no_log: true
+      tags:
+        - disk
+
+    - name: "ADIM 10 | Infra VM'leri aç"
+      community.vmware.vmware_guest_powerstate:
+        hostname: "{{ vcenter_host }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: false
+        folder: "{{ vcenter_folder }}"
+        name: "{{ item }}"
+        state: powered-on
+      loop: "{{ infra_vm_names }}"
+      loop_control:
+        label: "{{ item }}"
+      no_log: true
+      tags:
+        - disk
+
+    - name: "ADIM 10 | VM'lerin poweredOn olmasını bekle"
+      community.vmware.vmware_guest_info:
+        hostname: "{{ vcenter_host }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: false
+        datacenter: "{{ vcenter_datacenter }}"
+        folder: "{{ vcenter_folder }}"
+        name: "{{ item }}"
+      loop: "{{ infra_vm_names }}"
+      loop_control:
+        label: "{{ item }}"
+      register: disk_vm_poweron_info
+      until:
+        - disk_vm_poweron_info.instance is defined
+        - disk_vm_poweron_info.instance.hw_power_status == "poweredOn"
+      retries: 20
+      delay: 15
+      changed_when: false
+      no_log: true
+      tags:
+        - disk
+
+    - name: "ADIM 10 | Infra node'ların Ready olmasını bekle"
+      ansible.builtin.command:
+        cmd: >-
+          /usr/local/bin/oc get nodes
+          -l node-role.kubernetes.io/infra
+          -o jsonpath='{range .items[*]}{.metadata.name}{"="}{range .status.conditions[?(@.type=="Ready")]}{.status}{"\n"}{end}{end}'
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      register: infra_node_ready
+      until:
+        - infra_node_ready.stdout_lines | length == infra_replicas | int
+        - infra_node_ready.stdout_lines | reject('search', '=True$') | list | length == 0
+      retries: 40
+      delay: 30
+      changed_when: false
+      tags:
+        - disk
+
+# ============================================================
+#  OCP 4.x – ODF ve Local Storage Kurulumu Playbook
+#  SGK_v5.docx Bölüm 4 (Adım 19-23) esas alınmıştır.
+# ============================================================
+- name: "OCP 4.x – OpenShift Data Foundation (ODF) Kurulumu"
+  hosts: bastion
+  become: true
+  vars_files:
+    - group_vars/all.yml
+  vars:
+    kubeconfig_path: "{{ install_base_dir }}/ocp4/auth/kubeconfig"
+
+  tasks:
+
+    # ============================================================
+    # 1. Namespace ve OperatorGroup Oluşturma
+    # ============================================================
+    - name: "Local Storage ve ODF için Namespace'leri oluştur"
+      ansible.builtin.shell: |
+        cat <<EOF | /usr/local/bin/oc apply -f -
+        apiVersion: v1
+        kind: Namespace
+        metadata:
+          name: openshift-local-storage
+        ---
+        apiVersion: v1
+        kind: Namespace
+        metadata:
+          name: openshift-storage
+        ---
+        apiVersion: operators.coreos.com/v1
+        kind: OperatorGroup
+        metadata:
+          name: openshift-local-storage-operatorgroup
+          namespace: openshift-local-storage
+        spec:
+          targetNamespaces:
+          - openshift-local-storage
+        ---
+        apiVersion: operators.coreos.com/v1
+        kind: OperatorGroup
+        metadata:
+          name: openshift-storage-operatorgroup
+          namespace: openshift-storage
+        spec:
+          targetNamespaces:
+          - openshift-storage
+        EOF
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      changed_when: true
+
+    # ============================================================
+    # 2. Local Storage ve ODF Operatörlerinin Kurulması
+    # ============================================================
+    - name: "Operatör Subscription'larını oluştur (Automatic Approval)"
+      ansible.builtin.shell: |
+        cat <<EOF | /usr/local/bin/oc apply -f -
+        apiVersion: operators.coreos.com/v1alpha1
+        kind: Subscription
+        metadata:
+          name: local-storage-operator
+          namespace: openshift-local-storage
+        spec:
+          channel: stable
+          installPlanApproval: Automatic
+          name: local-storage-operator
+          source: redhat-operators
+          sourceNamespace: openshift-marketplace
+        ---
+        apiVersion: operators.coreos.com/v1alpha1
+        kind: Subscription
+        metadata:
+          name: odf-operator
+          namespace: openshift-storage
+        spec:
+          channel: stable-4.20
+          installPlanApproval: Automatic
+          name: odf-operator
+          source: redhat-operators
+          sourceNamespace: openshift-marketplace
+        EOF
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      changed_when: true
+
+    - name: "Operatörlerin ClusterServiceVersion (CSV) başarıyla yüklenmesini bekle"
+      ansible.builtin.shell: |
+        /usr/local/bin/oc get csv -n {{ item }} -o jsonpath='{.items[0].status.phase}'
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      loop:
+        - openshift-local-storage
+        - openshift-storage
+      register: csv_status
+      until: "csv_status.stdout == 'Succeeded'"
+      retries: 30
+      delay: 30
+      changed_when: false
+
+    # ============================================================
+    # 3. Disk Tanıma Sorunu (Rotational) Çözümü
+    # ============================================================
+    - name: "Infra node isimlerini al"
+      ansible.builtin.command:
+        cmd: "/usr/local/bin/oc get nodes -l node-role.kubernetes.io/infra -o jsonpath='{.items[*].metadata.name}'"
       environment:
         KUBECONFIG: "{{ kubeconfig_path }}"
       register: infra_nodes
       changed_when: false
 
-    - name: "Infra node listesi"
-      ansible.builtin.debug:
-        var: infra_nodes.stdout_lines
-
-
-
-    # ============================================================
-    # ADIM 10 – Ekstra Disk Ekleme (§3.2 SGK_v5)
-    #
-    # community.vmware.vmware_guest_disk modülü ile her infra
-    # node'una otomatik olarak 1 TB disk eklenir.
-    #
-    # Gereksinimler (bastion host üzerinde):
-    #   pip install pyVmomi
-    #   ansible-galaxy collection install community.vmware
-    # ============================================================
-
-    - name: "pyVmomi kurulu olduğundan emin ol (community.vmware gereksinimi)"
-      ansible.builtin.pip:
-        name: pyVmomi
-        state: present
-
-    - name: "Infra Machine'lerin VMware providerID'lerini al"
-      ansible.builtin.command:
-        cmd: >
-          /usr/local/bin/oc get machines -n openshift-machine-api
-          -l machine.openshift.io/cluster-api-machine-role=infra
-          -o jsonpath='{.items[*].spec.providerSpec.value.template}'
-      environment:
-        KUBECONFIG: "{{ kubeconfig_path }}"
-      register: infra_vm_templates_raw
-      changed_when: false
-
-    # OCP IPI, VM'leri "<cluster_name>-<id>-infra-<n>" adıyla oluşturur.
-    # Machine nesnelerinin metadata.name alanı doğrudan VMware VM adıdır.
-    - name: "Infra Machine adlarını (= VMware VM adları) al"
-      ansible.builtin.command:
-        cmd: >
-          /usr/local/bin/oc get machines -n openshift-machine-api
-          -l machine.openshift.io/cluster-api-machine-role=infra
-          -o jsonpath='{.items[*].metadata.name}'
-      environment:
-        KUBECONFIG: "{{ kubeconfig_path }}"
-      register: infra_vm_names_raw
-      changed_when: false
-
-    - name: "Infra VM adlarını listeye dönüştür"
+    - name: "Infra VM adlarını listeye dönüştür (LocalVolumeSet için)"
       ansible.builtin.set_fact:
-        infra_vm_names: "{{ infra_vm_names_raw.stdout.split() }}"
+        infra_vm_names: "{{ infra_nodes.stdout.split() }}"
 
-    - name: "Infra VM listesi"
-      ansible.builtin.debug:
-        msg: "Disk eklenecek VM'ler: {{ infra_vm_names }}"
-
-    - name: "Her infra VM'ini kapat (Shut Down Guest OS)"
-      community.vmware.vmware_guest_powerstate:
-        hostname:       "{{ vcenter_host }}"
-        username:       "{{ vcenter_username }}"
-        password:       "{{ vcenter_password }}"
-        validate_certs: false
-        datacenter:     "{{ vcenter_datacenter }}"
-        folder:         "{{ vcenter_folder }}"
-        name:           "{{ item }}"
-        state:          shutdown-guest
-      loop: "{{ infra_vm_names }}"
-      loop_control:
-        label: "{{ item }}"
-
-    - name: "VM'lerin tamamen kapanmasını bekle (PoweredOff)"
-      community.vmware.vmware_guest_info:
-        hostname:       "{{ vcenter_host }}"
-        username:       "{{ vcenter_username }}"
-        password:       "{{ vcenter_password }}"
-        validate_certs: false
-        datacenter:     "{{ vcenter_datacenter }}"
-        name:           "{{ item }}"
-      register: vm_info
-      until: vm_info.instance.hw_power_status == 'poweredOff'
-      retries: 20
-      delay: 15
-      loop: "{{ infra_vm_names }}"
-      loop_control:
-        label: "{{ item }}"
-      changed_when: false
-
-    - name: "Her infra VM'ine {{ infra_extra_disk_gb }} GB disk ekle"
-      community.vmware.vmware_guest_disk:
-        hostname:       "{{ vcenter_host }}"
-        username:       "{{ vcenter_username }}"
-        password:       "{{ vcenter_password }}"
-        validate_certs: false
-        datacenter:     "{{ vcenter_datacenter }}"
-        folder:         "{{ vcenter_folder }}"
-        name:           "{{ item }}"
-        disk:
-          - size_gb:    "{{ infra_extra_disk_gb }}"
-            type:       thin
-            datastore:  "{{ vcenter_datastore }}"
-            state:      present
-            scsi_type:  paravirtual
-      loop: "{{ infra_vm_names }}"
-      loop_control:
-        label: "{{ item }}"
-
-    - name: "Her infra VM'ini yeniden başlat (power-on)"
-      community.vmware.vmware_guest_powerstate:
-        hostname:       "{{ vcenter_host }}"
-        username:       "{{ vcenter_username }}"
-        password:       "{{ vcenter_password }}"
-        validate_certs: false
-        datacenter:     "{{ vcenter_datacenter }}"
-        folder:         "{{ vcenter_folder }}"
-        name:           "{{ item }}"
-        state:          powered-on
-      loop: "{{ infra_vm_names }}"
-      loop_control:
-        label: "{{ item }}"
-
-    - name: "Infra node'larının tekrar Ready olmasını bekle (disk ekleme sonrası)"
-      ansible.builtin.command:
-        cmd: >
-          /usr/local/bin/oc get nodes
-          -l node-role.kubernetes.io/infra
-          -o jsonpath='{.items[*].status.conditions[-1].type}'
+    - name: "Infra node'lardaki diskleri SSD (non-rotational) olarak işaretle (oc debug ile)"
+      ansible.builtin.shell: >
+        /usr/local/bin/oc debug node/{{ item }} -- chroot /host /bin/bash -c 
+        "for disk in \$(ls /sys/block/ | grep -E '^sd|^vd|^nvme'); do 
+        echo 'Changing /dev/\$disk to non-rotational'; 
+        echo 0 > /sys/block/\$disk/queue/rotational; 
+        done"
       environment:
         KUBECONFIG: "{{ kubeconfig_path }}"
-      register: infra_node_ready
-      until: >
-        infra_node_ready.stdout.split() | length == infra_replicas | int
-        and infra_node_ready.stdout.split() | unique == ['Ready']
+      loop: "{{ infra_vm_names }}"
+      register: disk_fix
+      changed_when: true
+
+    - name: "Disk değişikliklerini görmesi için Local Storage podlarını yeniden başlat (CACHE TEMİZLEME)"
+      ansible.builtin.command:
+        cmd: "/usr/local/bin/oc delete pods --all -n openshift-local-storage"
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      changed_when: true
+
+    # ============================================================
+    # 4. LocalVolumeSet Oluşturma
+    # ============================================================
+    - name: "LocalVolumeSet (local-block) kaynağını oluştur"
+      ansible.builtin.shell: |
+        cat <<EOF | /usr/local/bin/oc apply -f -
+        apiVersion: local.storage.openshift.io/v1alpha1
+        kind: LocalVolumeSet
+        metadata:
+          name: local-block
+          namespace: openshift-local-storage
+        spec:
+          nodeSelector:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: In
+                    values:
+        {% for node in infra_vm_names %}
+                      - {{ node }}
+        {% endfor %}
+          storageClassName: local-block
+          volumeMode: Block
+          deviceInclusionSpec:
+            deviceTypes:
+              - disk
+              - part
+            minSize: 100Gi
+          tolerations:
+            - effect: NoSchedule
+              key: node.ocs.openshift.io/storage
+              operator: Equal
+              value: "true"
+            - effect: NoSchedule
+              key: node-role.kubernetes.io/infra
+              operator: Equal
+              value: reserved
+            - effect: NoExecute
+              key: node-role.kubernetes.io/infra
+              operator: Equal
+              value: reserved
+        EOF
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      changed_when: true
+
+    - name: "Persistent Volume'ların (PV) oluşmasını bekle"
+      ansible.builtin.shell: "/usr/local/bin/oc get pv -o custom-columns=NAME:.metadata.name,SC:.spec.storageClassName --no-headers | grep 'local-block' | wc -l"
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      register: pv_check
+      until: pv_check.stdout | int >= 3
+      retries: 25
+      delay: 15
+      changed_when: false
+
+    # ============================================================
+    # 5. StorageCluster Oluşturma
+    # ============================================================
+    - name: "StorageCluster (ocs-storagecluster) kaynağını oluştur"
+      ansible.builtin.shell: |
+        cat <<EOF | /usr/local/bin/oc apply -f -
+        apiVersion: ocs.openshift.io/v1
+        kind: StorageCluster
+        metadata:
+          name: ocs-storagecluster
+          namespace: openshift-storage
+        spec:
+          manageNodes: false
+          storageDeviceSets:
+            - count: 1
+              replica: 3
+              name: ocs-deviceset
+              placement: {}
+              portable: false
+              resources: {}
+              dataPVCTemplate:
+                spec:
+                  storageClassName: local-block
+                  accessModes:
+                    - ReadWriteOnce
+                  volumeMode: Block
+                  resources:
+                    requests:
+                      storage: 900Gi
+        EOF
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      changed_when: true
+    
+    - name: "StorageCluster'ın Ready ve Healthy durumuna geçmesini bekle (~5-10 dk)"
+      ansible.builtin.command:
+        cmd: "/usr/local/bin/oc get storagecluster ocs-storagecluster -n openshift-storage -o jsonpath='{.status.phase}'"
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      register: sc_status
+      until: sc_status.stdout == 'Ready'
       retries: 40
       delay: 30
       changed_when: false
 
-    - name: "Disk ekleme tamamlandı"
-      ansible.builtin.debug:
-        msg: >-
-          {{ infra_vm_names | length }} infra node'una {{ infra_extra_disk_gb }} GB
-          disk eklendi ve tüm node'lar Ready durumuna geçti.
+    # ============================================================
+    # 6. Default Storage Class Değişikliği
+    # ============================================================
+    - name: "thin-csi storageclass'ından default annotation'ını kaldır"
+      ansible.builtin.command:
+        cmd: "/usr/local/bin/oc annotate sc thin-csi storageclass.kubernetes.io/is-default-class-"
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      changed_when: true
+      failed_when: false
 
-# ============================================================
-# BÖLÜM 4 – ODF ve Local Storage Operator Kurulumu (§4 SGK_v5)
-# plays/04_odf.yml içinde tanımlanmıştır.
-# ============================================================
-- import_playbook: plays/04_odf.yml
+    - name: "ocs-storagecluster-ceph-rbd storageclass'ını default olarak ayarla"
+      ansible.builtin.command:
+        cmd: "/usr/local/bin/oc annotate sc ocs-storagecluster-ceph-rbd storageclass.kubernetes.io/is-default-class=true --overwrite"
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      changed_when: true
