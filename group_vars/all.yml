@@ -90,7 +90,7 @@ odf_disk_size: "1Ti"
 odf_pv_minimum: 3
 
 
-# ---- CP4I / APIC Kurulumu (§5-7 SGK_v5) ----
+# ---- APIC Kurulumu (§5-7 SGK_v5) ----
 #
 # apic_entitlement_key: IBM Entitlement Key
 #   https://myibm.ibm.com/products-services/containerlibrary adresinden alın.
@@ -102,33 +102,28 @@ odf_pv_minimum: 3
 # APIC kurulumu yapılacak namespace
 apic_namespace: "apic"
 
-# CP4I Platform UI namespace (Platform Navigator kurulursa kullanılır)
-cp4i_namespace: "cp4i"
-
 # APIConnectCluster CR ismi
 apic_instance_name: "apic"
 
-# Deployment profile – n1xc17.m48 = nonproduction small (3 worker node için önerilen)
-# Diğer profiller: n3xc16.m64 (production minimum), n3xc32.m96 (production standart)
+# Deployment profile
+#   n1xc17.m48  – nonproduction small (3 worker node için minimum)
+#   n3xc16.m64  – production minimum
+#   n3xc32.m96  – production standart
 apic_profile: "n1xc17.m48"
 
 # License bilgileri
 # License ID listesi: https://ibm.github.io/cloud-pak/assets/html/ibm-apiconnect-table.html
 apic_license_id: "L-MMBZ-295QZQ"       # API Connect nonproduction lisansı
-apic_license_use: "nonproduction"        # production veya nonproduction
+apic_license_use: "nonproduction"       # production veya nonproduction
 apic_license_metric: "PROCESSOR_VALUE_UNIT"
-
-# APIC uygulama versiyonu (boş bırakılırsa operatörün latest'ını kullanır)
-apic_version: ""
 
 # StorageClass – ODF hazırsa ocs-storagecluster-ceph-rbd, yoksa thin-csi
 apic_storage_class: "thin-csi"
 
-# IBM Catalog channel'ları
-cp4i_catalog_channel: "v16.1"
+# ibm-apiconnect operatör channel'ı
 apic_catalog_channel: "v10.0"
 
-# Operatör kurulum namespace'i
+# Operatörün kurulacağı namespace (cluster-wide için openshift-operators önerilir)
 apic_operator_namespace: "openshift-operators"
 
 # InstallPlan onay modu – Manual veya Automatic

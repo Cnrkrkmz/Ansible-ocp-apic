@@ -1,29 +1,30 @@
 ---
 # ============================================================
-#  SGK_v5.docx Bölüm 5-7 – IBM CP4I Catalog + APIC Kurulumu
+#  SGK_v5.docx Bölüm 5-7 – IBM API Connect Kurulumu
 #
 #  Kapsam:
-#    §5.1  IBM Catalog Source'larının eklenmesi
-#    §5.2  Operatörlerin kurulması (cert-manager, foundational
-#          services, CP4I, APIC, DataPower)
-#    §5.3  IBM Entitlement Key – image pull secret
-#    §7    APIConnectCluster (top-level CR) ile APIC kurulumu
+#    1.  IBM Catalog Source (ibm-operator-catalog) eklenir
+#    2.  APIC namespace + ibm-entitlement-key pull secret oluşturulur
+#    3.  ibm-apiconnect operatörü kurulur (Subscription + InstallPlan onayı)
+#    4.  APIConnectCluster top-level CR ile tüm subsystem'lar deploy edilir
+#        (Management · Gateway · Portal · Analytics)
+#    5.  Ready durumu beklenir, route + admin şifresi çıktılanır
 #
 #  IBM Dökümantasyonu:
-#    https://www.ibm.com/docs/en/cloud-paks/cp-integration/16.1.0
-#    ?topic=images-adding-catalog-sources-openshift-cluster
+#    https://www.ibm.com/docs/en/api-connect/software/10.0.8_lts
+#    ?topic=installing-api-connect
 #
 #  Ön koşul:
-#    - OCP cluster hazır ve kubeconfig erişilebilir
-#    - IBM Entitlement Key mevcut (vars_prompt veya -e ile)
-#    - apic_storage_class değişkeni all.yml'de doğru ayarlı
-#      (ODF hazırsa: ocs-storagecluster-ceph-rbd, değilse: thin-csi)
+#    - OCP cluster çalışıyor, kubeconfig erişilebilir
+#    - IBM Entitlement Key hazır  →  myibm.ibm.com/products-services/containerlibrary
+#    - all.yml'de apic_storage_class doğru ayarlı
+#      (ODF yoksa: thin-csi,  ODF varsa: ocs-storagecluster-ceph-rbd)
 #
 #  Çalıştırma:
 #    ansible-playbook plays/05_apic.yml -i inventory/hosts.ini \
 #      -e "apic_entitlement_key=<IBM_ENTITLEMENT_KEY>"
 # ============================================================
-- name: "CP4I Catalog + APIC Kurulumu – §5-7 SGK_v5"
+- name: "IBM API Connect Kurulumu – §5-7 SGK_v5"
   hosts: bastion
   become: true
 
@@ -40,7 +41,8 @@
     # import_playbook (proje kökünden) çalıştırmak için first_found kullanılır.
     - name: "group_vars/all.yml yükle"
       ansible.builtin.include_vars:
-        file: "{{ lookup('first_found', [playbook_dir + '/group_vars/all.yml', playbook_dir + '/../group_vars/all.yml']) }}"
+        file: "{{ lookup('first_found', [playbook_dir + '/group_vars/all.yml',
+                                         playbook_dir + '/../group_vars/all.yml']) }}"
 
   vars:
     kubeconfig_path: "{{ install_base_dir }}/ocp4/auth/kubeconfig"
@@ -55,21 +57,14 @@
         mode: "0755"
 
     # ============================================================
-    # ADIM 24 – IBM Catalog Source'larının Eklenmesi  (§5.1 SGK_v5)
-    #
-    # Gerekli kataloglar:
-    #   - IBM Cloud Pak for Integration
-    #   - IBM API Connect
-    #   - IBM DataPower Gateway
-    #   - IBM Cloud Pak foundational services
+    # ADIM 1 – IBM Operator Catalog Source
     # ============================================================
 
-    - name: "IBM CatalogSource manifesti yaz"
+    - name: "ibm-operator-catalog CatalogSource manifesti yaz"
       ansible.builtin.copy:
-        dest: "{{ apic_manifests_dir }}/01-ibm-catalogs.yaml"
+        dest: "{{ apic_manifests_dir }}/01-ibm-catalog.yaml"
         mode: "0644"
         content: |
-          ---
           apiVersion: operators.coreos.com/v1alpha1
           kind: CatalogSource
           metadata:
@@ -83,29 +78,15 @@
             updateStrategy:
               registryPoll:
                 interval: 45m
-          ---
-          apiVersion: operators.coreos.com/v1alpha1
-          kind: CatalogSource
-          metadata:
-            name: opencloud-operators
-            namespace: openshift-marketplace
-          spec:
-            displayName: IBMCS Operators
-            image: icr.io/cpopen/ibm-common-service-catalog:latest
-            publisher: IBM
-            sourceType: grpc
-            updateStrategy:
-              registryPoll:
-                interval: 45m
 
-    - name: "IBM CatalogSource'larını oluştur"
+    - name: "ibm-operator-catalog CatalogSource oluştur"
       ansible.builtin.command:
-        cmd: "/usr/local/bin/oc apply -f {{ apic_manifests_dir }}/01-ibm-catalogs.yaml"
+        cmd: "/usr/local/bin/oc apply -f {{ apic_manifests_dir }}/01-ibm-catalog.yaml"
       environment:
         KUBECONFIG: "{{ kubeconfig_path }}"
       changed_when: true
 
-    - name: "IBM CatalogSource'larının hazır olmasını bekle"
+    - name: "ibm-operator-catalog READY olmasını bekle"
       ansible.builtin.shell: |
         /usr/local/bin/oc get catalogsource ibm-operator-catalog \
           -n openshift-marketplace \
@@ -114,26 +95,105 @@
         executable: /bin/bash
       environment:
         KUBECONFIG: "{{ kubeconfig_path }}"
-      register: catalog_status
-      until: catalog_status.stdout == "READY"
+      register: catalog_state
+      until: catalog_state.stdout == "READY"
       retries: 30
       delay: 20
       changed_when: false
 
     - name: "IBM CatalogSource durumu"
       ansible.builtin.debug:
-        msg: "ibm-operator-catalog durumu: {{ catalog_status.stdout }}"
+        msg: "ibm-operator-catalog: {{ catalog_state.stdout }}"
 
     # ============================================================
-    # ADIM 25 – Operatörlerin Kurulması  (§5.2 SGK_v5)
+    # ADIM 2 – APIC Namespace + ibm-entitlement-key Pull Secret
     #
-    # Kurulacak 5 operatör (sırayla):
-    #   1. cert-manager (Red Hat built-in)
-    #   2. IBM Cloud Pak foundational services
-    #   3. IBM Cloud Pak for Integration
-    #   4. IBM API Connect
-    #   5. IBM DataPower Gateway (APIC ile otomatik gelir)
+    # Pull secret operatör Subscription'larından ÖNCE oluşturulmalı.
+    # Hem apic namespace'i hem de operatörün kurulduğu namespace
+    # cp.icr.io'ya erişmek için bu secret'a ihtiyaç duyar.
     # ============================================================
+
+    - name: "APIC namespace oluştur"
+      ansible.builtin.shell: |
+        /usr/local/bin/oc create namespace {{ apic_namespace }} \
+          --dry-run=client -o yaml | /usr/local/bin/oc apply -f -
+      args:
+        executable: /bin/bash
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      changed_when: true
+
+    - name: "ibm-entitlement-key pull secret – {{ apic_namespace }}"
+      ansible.builtin.shell: |
+        /usr/local/bin/oc create secret docker-registry ibm-entitlement-key \
+          --docker-server=cp.icr.io \
+          --docker-username=cp \
+          --docker-password="{{ apic_entitlement_key }}" \
+          -n {{ apic_namespace }} \
+          --dry-run=client -o yaml | /usr/local/bin/oc apply -f -
+      args:
+        executable: /bin/bash
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      changed_when: true
+      no_log: true
+
+    - name: "ibm-entitlement-key pull secret – {{ apic_operator_namespace }}"
+      ansible.builtin.shell: |
+        /usr/local/bin/oc create secret docker-registry ibm-entitlement-key \
+          --docker-server=cp.icr.io \
+          --docker-username=cp \
+          --docker-password="{{ apic_entitlement_key }}" \
+          -n {{ apic_operator_namespace }} \
+          --dry-run=client -o yaml | /usr/local/bin/oc apply -f -
+      args:
+        executable: /bin/bash
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      changed_when: true
+      no_log: true
+
+    - name: "Pull secret'lar hazır"
+      ansible.builtin.debug:
+        msg: "ibm-entitlement-key → {{ apic_namespace }}, {{ apic_operator_namespace }}"
+
+    # ============================================================
+    # ADIM 3 – cert-manager Operatörü Kurulumu
+    #
+    # OCP 4.14+ built-in cert-manager yerine Red Hat cert-manager
+    # operatörü kullanılır; APIC TLS sertifikalarını yönetir.
+    # ============================================================
+
+    - name: "cert-manager-operator namespace oluştur"
+      ansible.builtin.shell: |
+        /usr/local/bin/oc create namespace cert-manager-operator \
+          --dry-run=client -o yaml | /usr/local/bin/oc apply -f -
+      args:
+        executable: /bin/bash
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      changed_when: true
+
+    - name: "cert-manager OperatorGroup manifesti yaz"
+      ansible.builtin.copy:
+        dest: "{{ apic_manifests_dir }}/02-cert-manager-operatorgroup.yaml"
+        mode: "0644"
+        content: |
+          apiVersion: operators.coreos.com/v1
+          kind: OperatorGroup
+          metadata:
+            name: cert-manager-operator
+            namespace: cert-manager-operator
+          spec:
+            targetNamespaces:
+              - cert-manager-operator
+
+    - name: "cert-manager OperatorGroup oluştur"
+      ansible.builtin.command:
+        cmd: "/usr/local/bin/oc apply -f {{ apic_manifests_dir }}/02-cert-manager-operatorgroup.yaml"
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      changed_when: true
 
     - name: "cert-manager Subscription manifesti yaz"
       ansible.builtin.copy:
@@ -152,34 +212,6 @@
             source: redhat-operators
             sourceNamespace: openshift-marketplace
 
-    - name: "cert-manager namespace oluştur"
-      ansible.builtin.shell: |
-        /usr/local/bin/oc create namespace cert-manager-operator --dry-run=client -o yaml \
-          | /usr/local/bin/oc apply -f -
-      args:
-        executable: /bin/bash
-      environment:
-        KUBECONFIG: "{{ kubeconfig_path }}"
-      changed_when: true
-
-    - name: "cert-manager OperatorGroup oluştur"
-      ansible.builtin.shell: |
-        cat <<'EOF' | /usr/local/bin/oc apply -f -
-        apiVersion: operators.coreos.com/v1
-        kind: OperatorGroup
-        metadata:
-          name: cert-manager-operator
-          namespace: cert-manager-operator
-        spec:
-          targetNamespaces:
-            - cert-manager-operator
-        EOF
-      args:
-        executable: /bin/bash
-      environment:
-        KUBECONFIG: "{{ kubeconfig_path }}"
-      changed_when: true
-
     - name: "cert-manager Subscription oluştur"
       ansible.builtin.command:
         cmd: "/usr/local/bin/oc apply -f {{ apic_manifests_dir }}/02-cert-manager-subscription.yaml"
@@ -187,41 +219,72 @@
         KUBECONFIG: "{{ kubeconfig_path }}"
       changed_when: true
 
-    - name: "IBM foundational services + CP4I + APIC Subscription manifestleri yaz"
+    - name: "cert-manager InstallPlan'ı bekle ve onayla"
+      ansible.builtin.shell: |
+        PENDING=$(/usr/local/bin/oc get installplan -n cert-manager-operator \
+          -o jsonpath='{.items[?(@.spec.approved==false)].metadata.name}' 2>/dev/null)
+        if [ -n "$PENDING" ]; then
+          for ip in $PENDING; do
+            /usr/local/bin/oc patch installplan "$ip" \
+              -n cert-manager-operator --type merge \
+              -p '{"spec":{"approved":true}}'
+            echo "approved: $ip"
+          done
+        else
+          echo "no_pending"
+        fi
+      args:
+        executable: /bin/bash
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      register: certmgr_ip_result
+      until: >
+        certmgr_ip_result.rc == 0 and
+        ('approved:' in certmgr_ip_result.stdout or
+         'no_pending' in certmgr_ip_result.stdout)
+      retries: 20
+      delay: 15
+      changed_when: "'approved:' in certmgr_ip_result.stdout"
+      when: apic_install_plan_approval == "Manual"
+
+    - name: "cert-manager CSV'nin Succeeded olmasını bekle"
+      ansible.builtin.shell: |
+        /usr/local/bin/oc get csv -n cert-manager-operator \
+          --no-headers \
+          -o custom-columns='NAME:.metadata.name,PHASE:.status.phase' \
+          | grep 'cert-manager' | awk '{print $2}'
+      args:
+        executable: /bin/bash
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      register: certmgr_csv_status
+      until: "'Succeeded' in certmgr_csv_status.stdout"
+      retries: 30
+      delay: 20
+      changed_when: false
+
+    - name: "cert-manager operatör durumu"
+      ansible.builtin.debug:
+        msg: "cert-manager CSV: {{ certmgr_csv_status.stdout }}"
+
+    # ============================================================
+    # ADIM 4 – ibm-apiconnect Operatörü Kurulumu
+    #
+    # ibm-apiconnect subscription'ı ibm-datapower-operator'ı
+    # bağımlılık olarak otomatik çeker.
+    # installPlanApproval: Manual ise her InstallPlan ayrıca onaylanır.
+    # ============================================================
+
+    - name: "ibm-apiconnect Subscription manifesti yaz"
       ansible.builtin.copy:
-        dest: "{{ apic_manifests_dir }}/03-ibm-operator-subscriptions.yaml"
+        dest: "{{ apic_manifests_dir }}/02-apic-subscription.yaml"
         mode: "0644"
         content: |
-          ---
-          apiVersion: operators.coreos.com/v1alpha1
-          kind: Subscription
-          metadata:
-            name: ibm-common-service-operator
-            namespace: openshift-operators
-          spec:
-            channel: v4.6
-            installPlanApproval: "{{ apic_install_plan_approval }}"
-            name: ibm-common-service-operator
-            source: opencloud-operators
-            sourceNamespace: openshift-marketplace
-          ---
-          apiVersion: operators.coreos.com/v1alpha1
-          kind: Subscription
-          metadata:
-            name: ibm-integration-platform-navigator
-            namespace: openshift-operators
-          spec:
-            channel: "{{ cp4i_catalog_channel }}"
-            installPlanApproval: "{{ apic_install_plan_approval }}"
-            name: ibm-integration-platform-navigator
-            source: ibm-operator-catalog
-            sourceNamespace: openshift-marketplace
-          ---
           apiVersion: operators.coreos.com/v1alpha1
           kind: Subscription
           metadata:
             name: ibm-apiconnect
-            namespace: "{{ apic_operator_namespace }}"
+            namespace: {{ apic_operator_namespace }}
           spec:
             channel: "{{ apic_catalog_channel }}"
             installPlanApproval: "{{ apic_install_plan_approval }}"
@@ -229,55 +292,40 @@
             source: ibm-operator-catalog
             sourceNamespace: openshift-marketplace
 
-    - name: "IBM operatör Subscription'larını oluştur"
+    - name: "ibm-apiconnect Subscription oluştur"
       ansible.builtin.command:
-        cmd: "/usr/local/bin/oc apply -f {{ apic_manifests_dir }}/03-ibm-operator-subscriptions.yaml"
+        cmd: "/usr/local/bin/oc apply -f {{ apic_manifests_dir }}/02-apic-subscription.yaml"
       environment:
         KUBECONFIG: "{{ kubeconfig_path }}"
       changed_when: true
 
-    # Manual approval modunda InstallPlan'ları onayla
-    - name: "cert-manager InstallPlan'ı bekle ve onayla"
+    - name: "{{ apic_operator_namespace }} namespace'indeki tüm bekleyen InstallPlan'ları onayla"
       ansible.builtin.shell: |
-        IP=$(/usr/local/bin/oc get installplan -n cert-manager-operator \
-          -o jsonpath='{.items[?(@.spec.approved==false)].metadata.name}' 2>/dev/null | head -1)
-        if [ -n "$IP" ]; then
-          /usr/local/bin/oc patch installplan "$IP" \
-            -n cert-manager-operator --type merge \
-            -p '{"spec":{"approved":true}}'
-          echo "approved: $IP"
+        PENDING=$(/usr/local/bin/oc get installplan -n {{ apic_operator_namespace }} \
+          -o jsonpath='{.items[?(@.spec.approved==false)].metadata.name}' 2>/dev/null)
+        if [ -n "$PENDING" ]; then
+          for ip in $PENDING; do
+            /usr/local/bin/oc patch installplan "$ip" \
+              -n {{ apic_operator_namespace }} --type merge \
+              -p '{"spec":{"approved":true}}'
+            echo "approved: $ip"
+          done
         else
-          echo "already_approved_or_automatic"
+          echo "no_pending"
         fi
       args:
         executable: /bin/bash
       environment:
         KUBECONFIG: "{{ kubeconfig_path }}"
-      register: certmgr_ip_result
-      until: certmgr_ip_result.rc == 0
-      retries: 20
-      delay: 15
-      changed_when: "'approved:' in certmgr_ip_result.stdout"
-      when: apic_install_plan_approval == "Manual"
-
-    - name: "openshift-operators InstallPlan'larını onayla (ibm-apiconnect dahil)"
-      ansible.builtin.shell: |
-        for ip in $(/usr/local/bin/oc get installplan -n {{ apic_operator_namespace }} \
-          -o jsonpath='{.items[?(@.spec.approved==false)].metadata.name}' 2>/dev/null); do
-          /usr/local/bin/oc patch installplan "$ip" \
-            -n {{ apic_operator_namespace }} --type merge \
-            -p '{"spec":{"approved":true}}'
-          echo "approved: $ip"
-        done
-      args:
-        executable: /bin/bash
-      environment:
-        KUBECONFIG: "{{ kubeconfig_path }}"
-      register: operators_ip_result
-      until: operators_ip_result.rc == 0
+      register: apic_installplan_result
+      # InstallPlan henüz oluşmamış olabilir; oluşana kadar tekrar dene
+      until: >
+        apic_installplan_result.rc == 0 and
+        ('approved:' in apic_installplan_result.stdout or
+         'no_pending' in apic_installplan_result.stdout)
       retries: 30
       delay: 20
-      changed_when: "'approved:' in operators_ip_result.stdout"
+      changed_when: "'approved:' in apic_installplan_result.stdout"
       when: apic_install_plan_approval == "Manual"
 
     - name: "ibm-apiconnect CSV'nin Succeeded olmasını bekle"
@@ -296,74 +344,20 @@
       delay: 30
       changed_when: false
 
-    - name: "ibm-apiconnect CSV durumu"
+    - name: "ibm-apiconnect operatör durumu"
       ansible.builtin.debug:
-        msg: "IBM API Connect CSV: {{ apic_csv_status.stdout }}"
+        msg: "ibm-apiconnect CSV: {{ apic_csv_status.stdout }}"
 
     # ============================================================
-    # ADIM 26 – IBM Entitlement Key Pull Secret  (§5.3 SGK_v5)
+    # ADIM 4 – APIConnectCluster Top-Level CR
     #
-    # apic namespace ve openshift-operators namespace'lerine
-    # ayrı ayrı image pull secret oluşturulur.
+    # Tek CR ile tüm subsystem'lar kurulur:
+    #   Management · Gateway (DataPower) · Developer Portal · Analytics
     # ============================================================
 
-    - name: "APIC namespace oluştur"
-      ansible.builtin.shell: |
-        /usr/local/bin/oc create namespace {{ apic_namespace }} \
-          --dry-run=client -o yaml | /usr/local/bin/oc apply -f -
-      args:
-        executable: /bin/bash
-      environment:
-        KUBECONFIG: "{{ kubeconfig_path }}"
-      changed_when: true
-
-    - name: "ibm-entitlement-key secret'ını oluştur – {{ apic_namespace }}"
-      ansible.builtin.shell: |
-        /usr/local/bin/oc create secret docker-registry ibm-entitlement-key \
-          --docker-server=cp.icr.io \
-          --docker-username=cp \
-          --docker-password="{{ apic_entitlement_key }}" \
-          -n {{ apic_namespace }} \
-          --dry-run=client -o yaml | /usr/local/bin/oc apply -f -
-      args:
-        executable: /bin/bash
-      environment:
-        KUBECONFIG: "{{ kubeconfig_path }}"
-      changed_when: true
-      no_log: true
-
-    - name: "ibm-entitlement-key secret'ını oluştur – {{ apic_operator_namespace }}"
-      ansible.builtin.shell: |
-        /usr/local/bin/oc create secret docker-registry ibm-entitlement-key \
-          --docker-server=cp.icr.io \
-          --docker-username=cp \
-          --docker-password="{{ apic_entitlement_key }}" \
-          -n {{ apic_operator_namespace }} \
-          --dry-run=client -o yaml | /usr/local/bin/oc apply -f -
-      args:
-        executable: /bin/bash
-      environment:
-        KUBECONFIG: "{{ kubeconfig_path }}"
-      changed_when: true
-      no_log: true
-
-    # ============================================================
-    # ADIM 27 – APIConnectCluster Top-Level CR  (§7 SGK_v5)
-    #
-    # IBM Dökümantasyonu:
-    #   https://www.ibm.com/docs/en/api-connect/software/10.0.8_lts
-    #   ?topic=installing-api-connect
-    #
-    # Top-level CR ile tüm subsystem'lar tek seferde kurulur:
-    #   - Management
-    #   - Developer Portal
-    #   - Gateway (DataPower)
-    #   - Analytics
-    # ============================================================
-
-    - name: "APIConnectCluster CR manifesti yaz (version belirtilmeden)"
+    - name: "APIConnectCluster CR manifesti yaz"
       ansible.builtin.copy:
-        dest: "{{ apic_manifests_dir }}/04-apiconnectcluster.yaml"
+        dest: "{{ apic_manifests_dir }}/03-apiconnectcluster.yaml"
         mode: "0644"
         content: |
           apiVersion: apiconnect.ibm.com/v1beta1
@@ -383,41 +377,48 @@
               use: {{ apic_license_use }}
             profile: {{ apic_profile }}
             storageClassName: {{ apic_storage_class }}
-      when: apic_version | length == 0
-
-    - name: "APIConnectCluster CR manifesti yaz (version ile)"
-      ansible.builtin.copy:
-        dest: "{{ apic_manifests_dir }}/04-apiconnectcluster.yaml"
-        mode: "0644"
-        content: |
-          apiVersion: apiconnect.ibm.com/v1beta1
-          kind: APIConnectCluster
-          metadata:
-            name: {{ apic_instance_name }}
-            namespace: {{ apic_namespace }}
-            labels:
-              app.kubernetes.io/instance: apiconnect
-              app.kubernetes.io/managed-by: ibm-apiconnect
-              app.kubernetes.io/name: {{ apic_instance_name }}
-          spec:
-            license:
-              accept: true
-              license: {{ apic_license_id }}
-              metric: {{ apic_license_metric }}
-              use: {{ apic_license_use }}
-            profile: {{ apic_profile }}
-            version: "{{ apic_version }}"
-            storageClassName: {{ apic_storage_class }}
-      when: apic_version | length > 0
 
     - name: "APIConnectCluster CR oluştur"
       ansible.builtin.command:
-        cmd: "/usr/local/bin/oc apply -f {{ apic_manifests_dir }}/04-apiconnectcluster.yaml"
+        cmd: "/usr/local/bin/oc apply -f {{ apic_manifests_dir }}/03-apiconnectcluster.yaml"
       environment:
         KUBECONFIG: "{{ kubeconfig_path }}"
       changed_when: true
 
-    - name: "APIConnectCluster oluşturuldu – başlangıç durumu"
+    # apic namespace'indeki InstallPlan'lar da onaylanmalı (Manuel mod)
+    - name: "{{ apic_namespace }} namespace'indeki InstallPlan'ları onayla"
+      ansible.builtin.shell: |
+        PENDING=$(/usr/local/bin/oc get installplan -n {{ apic_namespace }} \
+          -o jsonpath='{.items[?(@.spec.approved==false)].metadata.name}' 2>/dev/null)
+        if [ -n "$PENDING" ]; then
+          for ip in $PENDING; do
+            /usr/local/bin/oc patch installplan "$ip" \
+              -n {{ apic_namespace }} --type merge \
+              -p '{"spec":{"approved":true}}'
+            echo "approved: $ip"
+          done
+        else
+          echo "no_pending"
+        fi
+      args:
+        executable: /bin/bash
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      register: apic_ns_installplan
+      until: >
+        apic_ns_installplan.rc == 0 and
+        ('approved:' in apic_ns_installplan.stdout or
+         'no_pending' in apic_ns_installplan.stdout)
+      retries: 20
+      delay: 15
+      changed_when: "'approved:' in apic_ns_installplan.stdout"
+      when: apic_install_plan_approval == "Manual"
+
+    # ============================================================
+    # ADIM 5 – Ready Bekleme + Doğrulama
+    # ============================================================
+
+    - name: "APIConnectCluster başlangıç phase'i"
       ansible.builtin.command:
         cmd: >
           /usr/local/bin/oc get apiconnectcluster {{ apic_instance_name }}
@@ -429,11 +430,11 @@
       changed_when: false
       failed_when: false
 
-    - name: "APIConnectCluster başlangıç durumu"
+    - name: "Başlangıç durumu"
       ansible.builtin.debug:
-        msg: "APIConnectCluster başlangıç phase: '{{ apic_initial_phase.stdout }}'"
+        msg: "APIConnectCluster phase: '{{ apic_initial_phase.stdout }}'"
 
-    - name: "APIConnectCluster'ın Ready durumuna geçmesini bekle (~30-60 dk)"
+    - name: "APIConnectCluster'ın Ready olmasını bekle (~30-60 dk)"
       ansible.builtin.command:
         cmd: >
           /usr/local/bin/oc get apiconnectcluster {{ apic_instance_name }}
@@ -447,15 +448,11 @@
       delay: 30
       changed_when: false
 
-    - name: "APIConnectCluster Ready!"
+    - name: "APIConnectCluster Ready ✓"
       ansible.builtin.debug:
-        msg: "APIConnectCluster durumu: {{ apic_phase.stdout }} ✓"
+        msg: "APIConnectCluster phase: {{ apic_phase.stdout }}"
 
-    # ============================================================
-    # ADIM 28 – Kurulum Doğrulama  (§7 SGK_v5)
-    # ============================================================
-
-    - name: "APIC tüm route'larını listele"
+    - name: "APIC route'larını listele"
       ansible.builtin.command:
         cmd: "/usr/local/bin/oc get routes -n {{ apic_namespace }}"
       environment:
@@ -475,10 +472,9 @@
         if [ -n "$SECRET" ]; then
           /usr/local/bin/oc get secret "$SECRET" \
             -n {{ apic_namespace }} \
-            -o jsonpath="{.data.password}" | base64 -d
-          echo ""
+            -o jsonpath="{.data.password}" | base64 -d && echo
         else
-          echo "Secret henüz oluşmadı – oc get secret -n {{ apic_namespace }} | grep mgmt-admin-pass ile kontrol edin"
+          echo "(henüz oluşmadı – oc get secret -n {{ apic_namespace }} | grep mgmt-admin-pass)"
         fi
       args:
         executable: /bin/bash
@@ -486,20 +482,15 @@
         KUBECONFIG: "{{ kubeconfig_path }}"
       register: apic_admin_pass
       changed_when: false
-      no_log: false
 
     - name: "Cloud Manager erişim bilgileri"
       ansible.builtin.debug:
         msg:
-          - "============================================================"
+          - "======================================================"
           - "APIC Kurulumu Tamamlandı!"
-          - "============================================================"
-          - "Route'ları görmek için:"
-          - "  oc get routes -n {{ apic_namespace }}"
-          - ""
-          - "Cloud Manager URL: mgmt-admin-apic route'una bakın"
-          - "Kullanıcı adı: admin"
-          - "Şifre: {{ apic_admin_pass.stdout }}"
-          - ""
-          - "Toolkit indirmek için Cloud Manager veya API Manager UI'ı kullanın."
-          - "============================================================"
+          - "======================================================"
+          - "URL:      mgmt-admin-apic route'una bakın"
+          - "          oc get routes -n {{ apic_namespace }}"
+          - "Kullanıcı: admin"
+          - "Şifre:    {{ apic_admin_pass.stdout }}"
+          - "======================================================"
