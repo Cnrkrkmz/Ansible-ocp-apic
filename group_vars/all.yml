@@ -127,4 +127,4 @@ apic_catalog_channel: "v10.0"
 apic_operator_namespace: "openshift-operators"
 
 # InstallPlan onay modu – Manual veya Automatic
-apic_install_plan_approval: "Manual"
+apic_install_plan_approval: "Automatic"

@@ -249,17 +249,23 @@
 
     - name: "cert-manager CSV'nin Succeeded olmasını bekle"
       ansible.builtin.shell: |
-        /usr/local/bin/oc get csv -n cert-manager-operator \
-          --no-headers \
-          -o custom-columns='NAME:.metadata.name,PHASE:.status.phase' \
-          | grep 'cert-manager' | awk '{print $2}'
+        # CSV cert-manager-operator veya openshift-operators namespace'inde olabilir
+        PHASE=$( (
+          /usr/local/bin/oc get csv -n cert-manager-operator \
+            --no-headers \
+            -o custom-columns='NAME:.metadata.name,PHASE:.status.phase' 2>/dev/null
+          /usr/local/bin/oc get csv -n openshift-operators \
+            --no-headers \
+            -o custom-columns='NAME:.metadata.name,PHASE:.status.phase' 2>/dev/null
+        ) | grep -i 'cert-manager' | awk '{print $2}' | head -1)
+        echo "${PHASE:-NotFound}"
       args:
         executable: /bin/bash
       environment:
         KUBECONFIG: "{{ kubeconfig_path }}"
       register: certmgr_csv_status
-      until: "'Succeeded' in certmgr_csv_status.stdout"
-      retries: 30
+      until: certmgr_csv_status.stdout == "Succeeded"
+      retries: 40
       delay: 20
       changed_when: false
 
