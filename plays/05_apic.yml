@@ -57,38 +57,44 @@
         mode: "0755"
 
     # ============================================================
-    # ADIM 1 – IBM Operator Catalog Source
+    # ADIM 1 – IBM Catalog Source'ları
+    #
+    # 3 ayrı catalog source GitHub'daki sabit image digest'lerle apply edilir:
+    #   - ibm-apiconnect-catalog     (case 5.12.0)
+    #   - ibm-datapower-operator-catalog  (case 1.11.14)
+    #   - opencloud-operators        (ibm-cp-common-services 4.6.22)
     # ============================================================
 
-    - name: "ibm-operator-catalog CatalogSource manifesti yaz"
-      ansible.builtin.copy:
-        dest: "{{ apic_manifests_dir }}/01-ibm-catalog.yaml"
-        mode: "0644"
-        content: |
-          apiVersion: operators.coreos.com/v1alpha1
-          kind: CatalogSource
-          metadata:
-            name: ibm-operator-catalog
-            namespace: openshift-marketplace
-          spec:
-            displayName: IBM Operator Catalog
-            image: icr.io/cpopen/ibm-operator-catalog
-            publisher: IBM
-            sourceType: grpc
-            updateStrategy:
-              registryPoll:
-                interval: 45m
-
-    - name: "ibm-operator-catalog CatalogSource oluştur"
+    - name: "ibm-apiconnect-catalog CatalogSource apply et"
       ansible.builtin.command:
-        cmd: "/usr/local/bin/oc apply -f {{ apic_manifests_dir }}/01-ibm-catalog.yaml"
+        cmd: >
+          /usr/local/bin/oc apply --filename
+          https://raw.githubusercontent.com/IBM/cloud-pak/master/repo/case/ibm-apiconnect/5.12.0/OLM/catalog-sources-linux-amd64.yaml
       environment:
         KUBECONFIG: "{{ kubeconfig_path }}"
       changed_when: true
 
-    - name: "ibm-operator-catalog READY olmasını bekle"
+    - name: "ibm-datapower-operator-catalog CatalogSource apply et"
+      ansible.builtin.command:
+        cmd: >
+          /usr/local/bin/oc apply --filename
+          https://raw.githubusercontent.com/IBM/cloud-pak/master/repo/case/ibm-datapower-operator/1.11.14/OLM/catalog-sources.yaml
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      changed_when: true
+
+    - name: "opencloud-operators CatalogSource apply et (ibm-cp-common-services)"
+      ansible.builtin.command:
+        cmd: >
+          /usr/local/bin/oc apply --filename
+          https://raw.githubusercontent.com/IBM/cloud-pak/master/repo/case/ibm-cp-common-services/4.6.22/OLM/catalog-sources.yaml
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      changed_when: true
+
+    - name: "CatalogSource'ların READY olmasını bekle"
       ansible.builtin.shell: |
-        /usr/local/bin/oc get catalogsource ibm-operator-catalog \
+        /usr/local/bin/oc get catalogsource {{ item }} \
           -n openshift-marketplace \
           -o jsonpath={.status.connectionState.lastObservedState}
       args:
@@ -100,10 +106,17 @@
       retries: 30
       delay: 20
       changed_when: false
+      loop:
+        - ibm-apiconnect-catalog
+        - ibm-datapower-operator-catalog
+        - opencloud-operators
 
-    - name: "IBM CatalogSource durumu"
+    - name: "CatalogSource durumları"
       ansible.builtin.debug:
-        msg: "ibm-operator-catalog: {{ catalog_state.stdout }}"
+        msg: "{{ item.item }}: {{ item.stdout }}"
+      loop: "{{ catalog_state.results }}"
+      loop_control:
+        label: "{{ item.item }}"
 
     # ============================================================
     # ADIM 2 – APIC Namespace + ibm-entitlement-key Pull Secret
@@ -275,11 +288,24 @@
     # installPlanApproval: Manual ise her InstallPlan ayrıca onaylanır.
     # ============================================================
 
-    - name: "ibm-apiconnect Subscription manifesti yaz"
+    - name: "ibm-apiconnect + common-services Subscription manifesti yaz"
       ansible.builtin.copy:
         dest: "{{ apic_manifests_dir }}/02-apic-subscription.yaml"
         mode: "0644"
         content: |
+          ---
+          apiVersion: operators.coreos.com/v1alpha1
+          kind: Subscription
+          metadata:
+            name: ibm-common-service-operator
+            namespace: {{ apic_operator_namespace }}
+          spec:
+            channel: "{{ common_services_channel }}"
+            installPlanApproval: "{{ apic_install_plan_approval }}"
+            name: ibm-common-service-operator
+            source: opencloud-operators
+            sourceNamespace: openshift-marketplace
+          ---
           apiVersion: operators.coreos.com/v1alpha1
           kind: Subscription
           metadata:
@@ -289,10 +315,10 @@
             channel: "{{ apic_catalog_channel }}"
             installPlanApproval: "{{ apic_install_plan_approval }}"
             name: ibm-apiconnect
-            source: ibm-operator-catalog
+            source: ibm-apiconnect-catalog
             sourceNamespace: openshift-marketplace
 
-    - name: "ibm-apiconnect Subscription oluştur"
+    - name: "ibm-apiconnect + common-services Subscription oluştur"
       ansible.builtin.command:
         cmd: "/usr/local/bin/oc apply -f {{ apic_manifests_dir }}/02-apic-subscription.yaml"
       environment:
