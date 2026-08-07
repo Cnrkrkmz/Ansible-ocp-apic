@@ -374,6 +374,21 @@
       ansible.builtin.debug:
         msg: "ibm-apiconnect CSV: {{ apic_csv_status.stdout }}"
 
+    - name: "ibm-apiconnect webhook pod'unun Ready olmasını bekle"
+      ansible.builtin.shell: |
+        /usr/local/bin/oc get pods -n {{ apic_operator_namespace }} \
+          -o jsonpath="{range .items[*]}{.metadata.name}{' '}{range .status.conditions[?(@.type=='Ready')]}{.status}{end}{'\n'}{end}" 2>/dev/null \
+          | grep ibm-apiconnect | grep True | wc -l
+      args:
+        executable: /bin/bash
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      register: webhook_ready
+      until: webhook_ready.stdout | trim | int >= 1
+      retries: 20
+      delay: 15
+      changed_when: false
+
     # ============================================================
     # ADIM 4 – APIConnectCluster Top-Level CR
     #
@@ -402,6 +417,7 @@
               metric: {{ apic_license_metric }}
               use: {{ apic_license_use }}
             profile: {{ apic_profile }}
+            version: "{{ apic_version }}"
             storageClassName: {{ apic_storage_class }}
 
     - name: "APIConnectCluster CR oluştur"
@@ -409,7 +425,11 @@
         cmd: "/usr/local/bin/oc apply -f {{ apic_manifests_dir }}/03-apiconnectcluster.yaml"
       environment:
         KUBECONFIG: "{{ kubeconfig_path }}"
-      changed_when: true
+      register: apic_cr_result
+      until: apic_cr_result.rc == 0
+      retries: 10
+      delay: 15
+      changed_when: apic_cr_result.rc == 0
 
     # apic namespace'indeki InstallPlan'lar da onaylanmalı (Manuel mod)
     - name: "{{ apic_namespace }} namespace'indeki InstallPlan'ları onayla"
