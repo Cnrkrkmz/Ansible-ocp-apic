@@ -113,8 +113,8 @@ apic_instance_name: "apic"
 apic_profile: "n1xc4.m24"
 
 # License bilgileri
-# License ID listesi: https://ibm.github.io/cloud-pak/assets/html/ibm-apiconnect-table.html
-apic_license_id: "L-MMBZ-295QZQ"       # API Connect nonproduction lisansı
+# License ID listesi: https://ibm.biz/apiclicensing
+apic_license_id: "L-HTFS-UAXYM3"       # API Connect 10.0.8.x nonproduction lisansı
 apic_license_use: "nonproduction"       # production veya nonproduction
 apic_license_metric: "PROCESSOR_VALUE_UNIT"
 
