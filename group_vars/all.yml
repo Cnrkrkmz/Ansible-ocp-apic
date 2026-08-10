@@ -123,10 +123,9 @@ apic_storage_class: "thin-csi"
 # ibm-apiconnect operatör channel'ı (case 5.12.0 → channel v5.12-sc2)
 apic_catalog_channel: "v5.12-sc2"
 
-# APIConnectCluster spec.version – zorunlu alan
-# oc get packagemanifest ibm-apiconnect -n openshift-marketplace \
-#   -o jsonpath='{.status.channels[?(@.name=="v5.12-sc2")].currentCSV}'
-apic_version: "5.12.0"
+# APIConnectCluster spec.version – uygulama versiyonu (operatör versiyonu değil)
+# Geçerli değerler: 10.0.8.10, 10.0.8.9, 10.0.8.8, ... 10.0.8.0
+apic_version: "10.0.8.10"
 
 # ibm-cp-common-services channel'ı (case 4.6.22 → channel v4.6)
 common_services_channel: "v4.6"
