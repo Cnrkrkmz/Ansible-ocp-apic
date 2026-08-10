@@ -119,30 +119,55 @@
         label: "{{ item.item }}"
 
     # ============================================================
-    # ADIM 2 – APIC Namespace + ibm-entitlement-key Pull Secret
+    # ADIM 2 – Namespace'ler + OperatorGroup + Pull Secret
     #
-    # Pull secret operatör Subscription'larından ÖNCE oluşturulmalı.
-    # Hem apic namespace'i hem de operatörün kurulduğu namespace
-    # cp.icr.io'ya erişmek için bu secret'a ihtiyaç duyar.
+    # Oluşturulan namespace'ler:
+    #   - apic                  → APIConnectCluster CR namespace'i
+    #   - ibm-common-services   → ibm-common-service-operator namespace'i
+    #
+    # ibm-common-services namespace'i için OperatorGroup gerekli,
+    # aksi halde OLM subscription'ı işleyemez.
+    # Pull secret her namespace'e ayrı eklenir (cp.icr.io erişimi için).
     # ============================================================
 
-    - name: "APIC namespace oluştur"
+    - name: "Namespace'leri oluştur (apic, ibm-common-services)"
       ansible.builtin.shell: |
-        /usr/local/bin/oc create namespace {{ apic_namespace }} \
+        /usr/local/bin/oc create namespace {{ item }} \
           --dry-run=client -o yaml | /usr/local/bin/oc apply -f -
       args:
         executable: /bin/bash
       environment:
         KUBECONFIG: "{{ kubeconfig_path }}"
       changed_when: true
+      loop:
+        - "{{ apic_namespace }}"
+        - ibm-common-services
 
-    - name: "ibm-entitlement-key pull secret – {{ apic_namespace }}"
+    - name: "ibm-common-services OperatorGroup oluştur"
+      ansible.builtin.shell: |
+        cat <<'EOF' | /usr/local/bin/oc apply -f -
+        apiVersion: operators.coreos.com/v1
+        kind: OperatorGroup
+        metadata:
+          name: ibm-common-services-operatorgroup
+          namespace: ibm-common-services
+        spec:
+          targetNamespaces:
+            - ibm-common-services
+        EOF
+      args:
+        executable: /bin/bash
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      changed_when: true
+
+    - name: "ibm-entitlement-key pull secret oluştur"
       ansible.builtin.shell: |
         /usr/local/bin/oc create secret docker-registry ibm-entitlement-key \
           --docker-server=cp.icr.io \
           --docker-username=cp \
           --docker-password="{{ apic_entitlement_key }}" \
-          -n {{ apic_namespace }} \
+          -n {{ item }} \
           --dry-run=client -o yaml | /usr/local/bin/oc apply -f -
       args:
         executable: /bin/bash
@@ -150,25 +175,14 @@
         KUBECONFIG: "{{ kubeconfig_path }}"
       changed_when: true
       no_log: true
-
-    - name: "ibm-entitlement-key pull secret – {{ apic_operator_namespace }}"
-      ansible.builtin.shell: |
-        /usr/local/bin/oc create secret docker-registry ibm-entitlement-key \
-          --docker-server=cp.icr.io \
-          --docker-username=cp \
-          --docker-password="{{ apic_entitlement_key }}" \
-          -n {{ apic_operator_namespace }} \
-          --dry-run=client -o yaml | /usr/local/bin/oc apply -f -
-      args:
-        executable: /bin/bash
-      environment:
-        KUBECONFIG: "{{ kubeconfig_path }}"
-      changed_when: true
-      no_log: true
+      loop:
+        - "{{ apic_namespace }}"
+        - ibm-common-services
+        - "{{ apic_operator_namespace }}"
 
     - name: "Pull secret'lar hazır"
       ansible.builtin.debug:
-        msg: "ibm-entitlement-key → {{ apic_namespace }}, {{ apic_operator_namespace }}"
+        msg: "ibm-entitlement-key → {{ apic_namespace }}, ibm-common-services, {{ apic_operator_namespace }}"
 
     # ============================================================
     # ADIM 3 – cert-manager Operatörü Kurulumu
@@ -298,7 +312,7 @@
           kind: Subscription
           metadata:
             name: ibm-common-service-operator
-            namespace: {{ apic_operator_namespace }}
+            namespace: ibm-common-services
           spec:
             channel: "{{ common_services_channel }}"
             installPlanApproval: "{{ apic_install_plan_approval }}"
@@ -513,8 +527,8 @@
     - name: "Cloud Manager admin şifresini al"
       ansible.builtin.shell: |
         SECRET=$(/usr/local/bin/oc get secret -n {{ apic_namespace }} \
-          --no-headers -o custom-columns='NAME:.metadata.name' \
-          | grep 'mgmt-admin-pass' | head -1)
+          -o jsonpath="{range .items[*]}{.metadata.name}{'\n'}{end}" 2>/dev/null \
+          | grep mgmt-admin-pass | head -1)
         if [ -n "$SECRET" ]; then
           /usr/local/bin/oc get secret "$SECRET" \
             -n {{ apic_namespace }} \
