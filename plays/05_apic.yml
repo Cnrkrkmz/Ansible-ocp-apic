@@ -143,7 +143,7 @@
         - "{{ apic_namespace }}"
         - ibm-common-services
 
-    - name: "ibm-common-services OperatorGroup oluştur"
+    - name: "ibm-common-services OperatorGroup oluştur (AllNamespaces)"
       ansible.builtin.shell: |
         cat <<'EOF' | /usr/local/bin/oc apply -f -
         apiVersion: operators.coreos.com/v1
@@ -151,9 +151,7 @@
         metadata:
           name: ibm-common-services-operatorgroup
           namespace: ibm-common-services
-        spec:
-          targetNamespaces:
-            - ibm-common-services
+        spec: {}
         EOF
       args:
         executable: /bin/bash
