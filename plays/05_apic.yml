@@ -20,21 +20,17 @@
 #    - all.yml'de apic_storage_class doğru ayarlı
 #      (ODF yoksa: thin-csi,  ODF varsa: ocs-storagecluster-ceph-rbd)
 #
-#  Çalıştırma:
+#  Çalıştırma (site.yml üzerinden – önerilen):
+#    ansible-playbook site.yml -i inventory/hosts.ini
+#    → pull_secret ve apic_entitlement_key başlangıçta sorulur
+#
+#  Çalıştırma (bağımsız):
 #    ansible-playbook plays/05_apic.yml -i inventory/hosts.ini \
 #      -e "apic_entitlement_key=<IBM_ENTITLEMENT_KEY>"
 # ============================================================
 - name: "IBM API Connect Kurulumu – §5-7 SGK_v5"
   hosts: bastion
   become: true
-
-  vars_prompt:
-    - name: apic_entitlement_key
-      prompt: >-
-        IBM Entitlement Key
-        (https://myibm.ibm.com/products-services/containerlibrary adresinden alın)
-      private: true
-      confirm: false
 
   pre_tasks:
     # group_vars/all.yml'i hem standalone (plays/ dizininden) hem

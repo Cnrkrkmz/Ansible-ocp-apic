@@ -25,6 +25,13 @@
       private: true
       confirm: false
 
+    - name: apic_entitlement_key
+      prompt: >-
+        IBM Entitlement Key
+        (https://myibm.ibm.com/products-services/containerlibrary adresinden alın)
+      private: true
+      confirm: false
+
   pre_tasks:
 
     # ============================================================
