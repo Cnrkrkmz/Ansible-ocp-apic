@@ -105,11 +105,12 @@ apic_namespace: "apic"
 # APIConnectCluster CR ismi
 apic_instance_name: "apic"
 
-# Deployment profile
-#   n1xc17.m48  – nonproduction small (3 worker node için minimum)
-#   n3xc16.m64  – production minimum
-#   n3xc32.m96  – production standart
-apic_profile: "n1xc17.m48"
+# Deployment profile – bu operatör versiyonunda geçerli seçenekler:
+#   n1xc4.m24   – nonproduction minimum  (1 replica, 4 CPU, 24GB)  ← seçili
+#   n1xc7.m48   – nonproduction small    (1 replica, 7 CPU, 48GB)
+#   n3xc4.m16   – production minimum     (3 replica, 4 CPU, 16GB)
+#   n3xc16.m64  – production standart    (3 replica, 16 CPU, 64GB)
+apic_profile: "n1xc4.m24"
 
 # License bilgileri
 # License ID listesi: https://ibm.github.io/cloud-pak/assets/html/ibm-apiconnect-table.html
