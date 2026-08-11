@@ -40,6 +40,18 @@
         file: "{{ lookup('first_found', [playbook_dir + '/group_vars/all.yml',
                                          playbook_dir + '/../group_vars/all.yml']) }}"
 
+    # vars_prompt → import_playbook zincirinde apic_entitlement_key bazen taşınmaz.
+    # Standalone çalıştırma için burada da sor (site.yml'den geliyorsa bu atlanır).
+    - name: "IBM Entitlement Key tanımlı mı kontrol et"
+      ansible.builtin.fail:
+        msg: >-
+          apic_entitlement_key tanımlı değil!
+          Lütfen şu yöntemlerden biriyle sağlayın:
+            1) site.yml üzerinden çalıştırın (vars_prompt ile sorulur)
+            2) -e "apic_entitlement_key=<key>" ile geçirin
+            3) group_vars/vault.yml içinde tanımlayın
+      when: apic_entitlement_key is not defined or apic_entitlement_key | length == 0
+
   vars:
     kubeconfig_path: "{{ install_base_dir }}/ocp4/auth/kubeconfig"
     apic_manifests_dir: "{{ install_base_dir }}/apic-manifests"
@@ -155,6 +167,23 @@
         KUBECONFIG: "{{ kubeconfig_path }}"
       changed_when: true
 
+    # openshift-operators OCP varsayılan namespace'i — oc create'e gerek yok ama
+    # diğer namespace'ler yeni oluşturulduğundan hepsini idempotent apply ile oluştur.
+    - name: "Pull secret namespace'lerinin varlığını güvence altına al"
+      ansible.builtin.shell: |
+        /usr/local/bin/oc create namespace {{ item }} \
+          --dry-run=client -o yaml | /usr/local/bin/oc apply -f -
+      args:
+        executable: /bin/bash
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      changed_when: true
+      failed_when: false
+      loop:
+        - "{{ apic_namespace }}"
+        - ibm-common-services
+        - "{{ apic_operator_namespace }}"
+
     - name: "ibm-entitlement-key pull secret oluştur"
       ansible.builtin.shell: |
         /usr/local/bin/oc create secret docker-registry ibm-entitlement-key \
@@ -169,10 +198,22 @@
         KUBECONFIG: "{{ kubeconfig_path }}"
       changed_when: true
       no_log: true
+      register: pull_secret_result
       loop:
         - "{{ apic_namespace }}"
         - ibm-common-services
         - "{{ apic_operator_namespace }}"
+
+    - name: "Pull secret oluşturma sonuçları (rc kontrolü)"
+      ansible.builtin.fail:
+        msg: >-
+          ibm-entitlement-key secret oluşturulamadı (namespace: {{ item.item }}).
+          Hata detayı için: oc get events -n {{ item.item }}
+          İpucu: apic_entitlement_key değişkeninin doğru tanımlı olduğundan emin olun.
+      when: item.rc != 0
+      loop: "{{ pull_secret_result.results }}"
+      loop_control:
+        label: "{{ item.item }}"
 
     - name: "Pull secret'lar hazır"
       ansible.builtin.debug:

@@ -743,6 +743,14 @@
       tags:
         - disk
 
+    # vars_prompt değerleri import_playbook chain'inde kaybolabilir.
+    # set_fact ile host değişkeni olarak saklayarak sonraki play'lere taşı.
+    - name: "Kimlik bilgilerini host fact olarak kaydet (import_playbook için)"
+      ansible.builtin.set_fact:
+        pull_secret: "{{ pull_secret }}"
+        apic_entitlement_key: "{{ apic_entitlement_key }}"
+      no_log: true
+
 # ============================================================
 #  OCP 4.x – ODF ve Local Storage Kurulumu Playbook
 #  SGK_v5.docx Bölüm 4 (Adım 19-23) esas alınmıştır.
