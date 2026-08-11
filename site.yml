@@ -974,21 +974,31 @@
         KUBECONFIG: "{{ kubeconfig_path }}"
       changed_when: true
     
-    - name: "StorageCluster'ın Ready ve Healthy durumuna geçmesini bekle (~5-10 dk)"
+    - name: "StorageCluster'ın Ready durumuna geçmesini bekle (IBM Lab: takılırsa hızla geç)"
       ansible.builtin.command:
         cmd: "/usr/local/bin/oc get storagecluster ocs-storagecluster -n openshift-storage -o jsonpath={.status.phase}"
       environment:
         KUBECONFIG: "{{ kubeconfig_path }}"
       register: sc_status
       until: sc_status.stdout == 'Ready'
-      retries: 40
-      delay: 30
+      retries: 5
+      delay: 10
       changed_when: false
-      # IBM Lab'da StorageCluster takılırsa playbook devam etsin
+      # IBM Lab'da StorageCluster "Progressing" durumunda kalabilir — APIC thin-csi kullanacak
       ignore_errors: true
 
+    - name: "StorageCluster durumu (bilgi)"
+      ansible.builtin.debug:
+        msg: >-
+          StorageCluster durumu: {{ sc_status.stdout | default('bilinmiyor') }}.
+          {% if sc_status.stdout != 'Ready' %}
+          ODF hazır değil — APIC thin-csi StorageClass ile devam edecek.
+          {% else %}
+          ODF hazır — APIC ocs-storagecluster-ceph-rbd kullanabilir.
+          {% endif %}
+
     # ============================================================
-    # 6. Default Storage Class Değişikliği
+    # 6. Default Storage Class Değişikliği (sadece ODF Ready ise anlamlı)
     # ============================================================
     - name: "thin-csi storageclass'ından default annotation'ını kaldır"
       ansible.builtin.command:
@@ -997,6 +1007,7 @@
         KUBECONFIG: "{{ kubeconfig_path }}"
       changed_when: true
       failed_when: false
+      ignore_errors: true
 
     - name: "ocs-storagecluster-ceph-rbd storageclass'ını default olarak ayarla"
       ansible.builtin.command:
