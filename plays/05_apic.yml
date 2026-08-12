@@ -374,6 +374,58 @@
         KUBECONFIG: "{{ kubeconfig_path }}"
       changed_when: true
 
+    # ── ibm-common-services InstallPlan onayı ────────────────────────────────
+    - name: "ibm-common-services namespace'indeki bekleyen InstallPlan'ları onayla"
+      ansible.builtin.shell: |
+        PENDING=$(/usr/local/bin/oc get installplan -n ibm-common-services \
+          -o jsonpath='{.items[?(@.spec.approved==false)].metadata.name}' 2>/dev/null)
+        if [ -n "$PENDING" ]; then
+          for ip in $PENDING; do
+            /usr/local/bin/oc patch installplan "$ip" \
+              -n ibm-common-services --type merge \
+              -p '{"spec":{"approved":true}}'
+            echo "approved: $ip"
+          done
+        else
+          echo "no_pending"
+        fi
+      args:
+        executable: /bin/bash
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      register: cs_installplan_result
+      until: >
+        cs_installplan_result.rc == 0 and
+        ('approved:' in cs_installplan_result.stdout or
+         'no_pending' in cs_installplan_result.stdout)
+      retries: 30
+      delay: 20
+      changed_when: "'approved:' in cs_installplan_result.stdout"
+      when: apic_install_plan_approval == "Manual"
+
+    # ── ibm-common-service-operator CSV Succeeded bekleme ────────────────────
+    # APIC operatörü Common Services hazır olmadan başlayamaz.
+    - name: "ibm-common-service-operator CSV'nin Succeeded olmasını bekle"
+      ansible.builtin.shell: |
+        PHASE=$(/usr/local/bin/oc get csv -n ibm-common-services \
+          -o jsonpath="{range .items[*]}{.metadata.name}{' '}{.status.phase}{'\n'}{end}" 2>/dev/null \
+          | grep ibm-common-service-operator | awk '{print $2}' | head -1)
+        echo "${PHASE:-NotFound}"
+      args:
+        executable: /bin/bash
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      register: cs_csv_status
+      until: cs_csv_status.stdout == "Succeeded"
+      retries: 40
+      delay: 30
+      changed_when: false
+
+    - name: "ibm-common-service-operator durumu"
+      ansible.builtin.debug:
+        msg: "ibm-common-service-operator CSV: {{ cs_csv_status.stdout }}"
+
+    # ── openshift-operators InstallPlan onayı ────────────────────────────────
     - name: "{{ apic_operator_namespace }} namespace'indeki tüm bekleyen InstallPlan'ları onayla"
       ansible.builtin.shell: |
         PENDING=$(/usr/local/bin/oc get installplan -n {{ apic_operator_namespace }} \
