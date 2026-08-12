@@ -337,7 +337,9 @@
     # installPlanApproval: Manual ise her InstallPlan ayrıca onaylanır.
     # ============================================================
 
-    - name: "ibm-apiconnect + common-services Subscription manifesti yaz"
+    # §5.2 SGK_v5: Tüm operatörler openshift-operators namespace'ine (AllNamespaces)
+    # kurulur. ibm-common-service-operator da buraya — ibm-common-services'e değil.
+    - name: "ibm-common-service-operator + ibm-apiconnect Subscription manifesti yaz"
       ansible.builtin.copy:
         dest: "{{ apic_manifests_dir }}/02-apic-subscription.yaml"
         mode: "0644"
@@ -347,7 +349,7 @@
           kind: Subscription
           metadata:
             name: ibm-common-service-operator
-            namespace: ibm-common-services
+            namespace: openshift-operators
           spec:
             channel: "{{ common_services_channel }}"
             installPlanApproval: "{{ apic_install_plan_approval }}"
@@ -359,7 +361,7 @@
           kind: Subscription
           metadata:
             name: ibm-apiconnect
-            namespace: {{ apic_operator_namespace }}
+            namespace: openshift-operators
           spec:
             channel: "{{ apic_catalog_channel }}"
             installPlanApproval: "{{ apic_install_plan_approval }}"
@@ -367,22 +369,22 @@
             source: ibm-apiconnect-catalog
             sourceNamespace: openshift-marketplace
 
-    - name: "ibm-apiconnect + common-services Subscription oluştur"
+    - name: "ibm-common-service-operator + ibm-apiconnect Subscription oluştur"
       ansible.builtin.command:
         cmd: "/usr/local/bin/oc apply -f {{ apic_manifests_dir }}/02-apic-subscription.yaml"
       environment:
         KUBECONFIG: "{{ kubeconfig_path }}"
       changed_when: true
 
-    # ── ibm-common-services InstallPlan onayı ────────────────────────────────
-    - name: "ibm-common-services namespace'indeki bekleyen InstallPlan'ları onayla"
+    # ── openshift-operators InstallPlan onayı (her iki subscription için) ───
+    - name: "openshift-operators namespace'indeki bekleyen InstallPlan'ları onayla"
       ansible.builtin.shell: |
-        PENDING=$(/usr/local/bin/oc get installplan -n ibm-common-services \
+        PENDING=$(/usr/local/bin/oc get installplan -n openshift-operators \
           -o jsonpath='{.items[?(@.spec.approved==false)].metadata.name}' 2>/dev/null)
         if [ -n "$PENDING" ]; then
           for ip in $PENDING; do
             /usr/local/bin/oc patch installplan "$ip" \
-              -n ibm-common-services --type merge \
+              -n openshift-operators --type merge \
               -p '{"spec":{"approved":true}}'
             echo "approved: $ip"
           done
@@ -404,10 +406,10 @@
       when: apic_install_plan_approval == "Manual"
 
     # ── ibm-common-service-operator CSV Succeeded bekleme ────────────────────
-    # APIC operatörü Common Services hazır olmadan başlayamaz.
-    - name: "ibm-common-service-operator CSV'nin Succeeded olmasını bekle"
+    # APIC operatörü Common Services hazır olmadan başlayamaz — önce bu beklenir.
+    - name: "ibm-common-service-operator CSV'nin Succeeded olmasını bekle (openshift-operators)"
       ansible.builtin.shell: |
-        PHASE=$(/usr/local/bin/oc get csv -n ibm-common-services \
+        PHASE=$(/usr/local/bin/oc get csv -n openshift-operators \
           -o jsonpath="{range .items[*]}{.metadata.name}{' '}{.status.phase}{'\n'}{end}" 2>/dev/null \
           | grep ibm-common-service-operator | awk '{print $2}' | head -1)
         echo "${PHASE:-NotFound}"
@@ -425,8 +427,8 @@
       ansible.builtin.debug:
         msg: "ibm-common-service-operator CSV: {{ cs_csv_status.stdout }}"
 
-    # ── openshift-operators InstallPlan onayı ────────────────────────────────
-    - name: "{{ apic_operator_namespace }} namespace'indeki tüm bekleyen InstallPlan'ları onayla"
+    # ── ibm-apiconnect CSV Succeeded bekleme ─────────────────────────────────
+    - name: "openshift-operators namespace'indeki tüm bekleyen InstallPlan'ları onayla"
       ansible.builtin.shell: |
         PENDING=$(/usr/local/bin/oc get installplan -n {{ apic_operator_namespace }} \
           -o jsonpath='{.items[?(@.spec.approved==false)].metadata.name}' 2>/dev/null)
